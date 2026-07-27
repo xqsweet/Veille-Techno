@@ -6,10 +6,6 @@ on:
     - cron: '14 5 * * *' # 05h14 UTC (06h14 Hiver FR)
   workflow_dispatch:
 
-# Permission nécessaire pour permettre au keepalive de réinitialiser les 60 jours
-permissions:
-  contents: write
-
 jobs:
   run-veille:
     runs-on: ubuntu-latest
@@ -36,7 +32,3 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: python main.py
-
-      # Step Keepalive : Empêche GitHub de désactiver le cron au bout de 60 jours
-      - name: Keepalive Workflow
-        uses: gautamkrishnar/keepalive-workflow@v2

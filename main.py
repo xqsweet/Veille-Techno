@@ -158,7 +158,7 @@ def collect_rss_articles():
 def generate_summary_with_gemini(articles):
     print("🧠 Analyse et synthèse par Gemini API...")
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-2.0-flash")
+    model = genai.GenerativeModel("gemini-3.5-flash-lite")
 
     date_str = datetime.datetime.now().strftime("%d/%m/%Y")
     news_context = "\n".join(articles)

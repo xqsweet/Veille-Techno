@@ -46,11 +46,11 @@ RSS_FEEDS = [
     "https://aws.amazon.com/blogs/aws/feed/",
     "https://techcrunch.com/feed/",
     "https://www.phoronix.com/phoronix-rss.php",
-    "https://www.cert.ssi.gouv.fr/feed/",     
-    "https://www.cncf.io/feed/",                
-    "https://huggingface.co/blog/feed.xml",       
-    "https://github.blog/feed/",                 
-    "https://www.omgubuntu.co.uk/feed"          
+    "https://www.cert.ssi.gouv.fr/feed/",       
+    "https://www.cncf.io/feed/",              
+    "https://huggingface.co/blog/feed.xml",     
+    "https://github.blog/feed/",               
+    "https://www.omgubuntu.co.uk/feed"           
 ]
 
 # ---------------------------------------------------------------------------
@@ -146,10 +146,10 @@ def collect_rss_articles():
     return articles, failed_feeds
 
 # ---------------------------------------------------------------------------
-# 2. SYNTHÈSE GEMINI (5 CATÉGORIES)
+# 2. SYNTHÈSE GEMINI (5 CATÉGORIES + TRI PAR URGENCE)
 # ---------------------------------------------------------------------------
 def generate_summary_with_gemini(articles):
-    print("🧠 Analyse et synthèse par Gemini API...")
+    print("🧠 Analyse, tri par urgence et synthèse par Gemini API...")
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel("gemini-3.5-flash-lite")
     date_str = datetime.datetime.now().strftime("%d/%m/%Y")
@@ -162,11 +162,16 @@ ACTUALITÉS BRUTES DU JOUR :
 
 Analyse ces informations brutes et rédige la synthèse de la veille techno en français au format Markdown.
 
-RÈGLES STRICTES DE SÉLECTION :
+RÈGLES STRICTES DE SÉLECTION & DE TRI :
 - Élimine les doublons de couverture presse entre médias.
 - En haut du rapport, rédige entre 3 et 5 faits marquants synthétisant les événements les plus critiques de la journée.
-- Conserve ensuite uniquement le Top 3 à 5 des actualités majeures par catégorie.
-- Si une catégorie n'a aucune actualité marquante aujourd'hui, écris exactement : "Aucune actualité majeure aujourd'hui dans cette catégorie."
+- Conserve ensuite le Top 3 à 5 des actualités majeures par catégorie.
+- NIVEAU D'URGENCE : Tu DOIS attribuer un niveau d'urgence à CHAQUE article avec le préfixe correspondant :
+  * 🔴 [CRITIQUE] : Failles majeures/Zero-Day, pannes Cloud critiques, fuites massives, rachat/faillite.
+  * 🟠 [ÉVOLUTION] : Sortie de version majeure (K8s, LLM, OS), nouvelles fonctionnalités clés.
+  * 🟢 [INFO] : Tutoriels, bons plans hardware, actualités de fond ou secondaires.
+- TRI STRICT : Dans chaque catégorie, TRIE obligatoirement les articles du PLUS CRITIQUE au MOINS CRITIQUE (d'abord les 🔴, puis les 🟠, puis les 🟢).
+- Si une catégorie n'a aucune actualité aujourd'hui, écris exactement : "Aucune actualité majeure aujourd'hui dans cette catégorie."
 - Format strict des liens hypertextes : [Nom du Média](URL_DIRECTE)
 
 STRUCTURE EXACTE À RESPECTER :
@@ -177,22 +182,28 @@ STRUCTURE EXACTE À RESPECTER :
 - [Fait marquant 3]
 
 ## 1. Systèmes, Réseaux & Virtualisation
-### [Titre clair de l'article en français]
+### 🔴 [CRITIQUE] Titre de l'article le plus urgent
 - Résumé : 2 à 3 phrases claires.
 - Pourquoi c'est important : Impact technique ou organisationnel.
 - Source : [Nom du Média](URL)
 
+### 🟠 [ÉVOLUTION] Titre de l'article suivant
+(Même structure)
+
+### 🟢 [INFO] Titre de l'article suivant
+(Même structure)
+
 ## 2. Intelligence Artificielle & Développement Software
-(Même structure pour les articles)
+(Même structure triée par urgence)
 
 ## 3. Cybersécurité & Vulnérabilités critiques
-(Même structure pour les articles)
+(Même structure triée par urgence)
 
 ## 4. DevOps, Cloud Native & Open Source
-(Même structure pour les articles)
+(Même structure triée par urgence)
 
 ## 5. Hardware & Innovations Tech
-(Même structure pour les articles)
+(Même structure triée par urgence)
 """
     response = model.generate_content(prompt)
     return response.text

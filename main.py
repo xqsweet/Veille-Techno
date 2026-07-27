@@ -175,14 +175,14 @@ Analyse ces informations brutes et rédige la synthèse de la veille techno en f
 
 ### RÈGLES STRICTES DE SÉLECTION :
 - Élimine les doublons de couverture presse entre médias.
-- En haut du rapport, rédige entre 3 et 5 faits marquants (TL;DR) synthétisant les événements les plus critiques de la journée.
+- En haut du rapport, rédige entre 3 et 5 faits marquants synthétisant les événements les plus critiques de la journée.
 - Conserve ensuite uniquement le Top 3 à 5 des actualités majeures par catégorie.
 - Si une catégorie n'a aucune actualité marquante aujourd'hui (ex: le week-end), écris exactement : "*Aucune actualité majeure aujourd'hui dans cette catégorie.*"
 - Format strict des liens hypertextes : [Nom du Média](URL_EXACTE)
 
 ### STRUCTURE EXACTE À RESPECTER :
 
-## 🚀 En bref (TL;DR)
+## 🚀 En bref
 - [Fait marquant 1]
 - [Fait marquant 2]
 - [Fait marquant 3]

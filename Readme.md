@@ -5,7 +5,7 @@ Pipeline Serverless 100 % gratuit pour collecter, analyser et synthétiser l'act
 ## 📌 Architecture
 - **Déclencheur :** GitHub Actions (Cron quotidien à 06h14 France)
 - **Ingestion :** Python (`feedparser`) - 14 flux RSS de référence
-- **IA / Traitement :** Google AI Studio (`gemini-2.0-flash`)
+- **IA / Traitement :** Google AI Studio (`gemini-3.5-flash-lite`)
 - **Restitution :** Notion API (Page quotidienne "Journal" avec Toggles et liens cliquables)
 - **Notification :** Bot Telegram (Push sur iPhone / Mac / PC)
 

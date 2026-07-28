@@ -45,8 +45,6 @@ RSS_FEEDS = [
 def check_notion_duplicate():
     """Vérifie l'heure locale (>= 18h) et s'assure qu'aucun doublon n'existe sur Notion."""
     is_manual = os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
-    
-    # En cas d'exécution manuelle (Workflow Dispatch), on autorise le lancement
     if is_manual:
         print("🚀 Lancement manuel détecté (Workflow Dispatch) : Contournement du filtre d'existence.")
         return

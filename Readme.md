@@ -5,7 +5,7 @@ Pipeline Serverless 100 % gratuit pour collecter, analyser et synthétiser l'act
 ## 📌 Architecture
 - **Déclencheur :** GitHub Actions (Cron quotidien à 18h15 France, été comme hiver)
 - **Ingestion :** Python (`feedparser`) - 19 flux RSS de référence (24h glissantes)
-- **IA / Traitement :** Google AI Studio (`gemini-3.5-flash-lite`) avec scoring & tri par niveau d'urgence
+- **IA / Traitement :** Google AI Studio (`gemini-3.5-flash-lite`) avec dédoublonnage inter-jours et tri par niveau d'urgence
 - **Restitution :** Notion API (Page quotidienne "Journal" avec Toggles déroulants et liens cliquables)
 - **Notification :** Bot Telegram (Push sur iPhone / Mac / PC)
 
@@ -40,4 +40,4 @@ Pipeline Serverless 100 % gratuit pour collecter, analyser et synthétiser l'act
 
 ## 🧪 Premier Test
 Dans l'onglet **Actions** de ton dépôt GitHub, clique sur **Daily Tech Watch Automation** ➔ **Run workflow**. 
-Tu recevras instantanément ta notification Telegram et la page apparaitra dans ton Notion !
+Tu recevras instantanément ta notification Telegram et la page apparaîtra dans ton Notion !

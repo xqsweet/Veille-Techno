@@ -40,25 +40,25 @@ RSS_FEEDS = [
 ]
 
 # ---------------------------------------------------------------------------
-# 0. SÉCURITÉ HORAIRE & DÉDOUBLONNAGE DYNAMIQUE NOTION (OPTION B)
+# 0. SÉCURITÉ HORAIRE & DÉDOUBLONNAGE DYNAMIQUE NOTION
 # ---------------------------------------------------------------------------
 def check_notion_duplicate():
     """Vérifie l'heure locale (>= 18h) et s'assure qu'aucun doublon n'existe sur Notion."""
     is_manual = os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
     
-    # En cas d'exécution manuelle, on force le lancement
+    # En cas d'exécution manuelle (Workflow Dispatch), on autorise le lancement
     if is_manual:
         print("🚀 Lancement manuel détecté (Workflow Dispatch) : Contournement du filtre d'existence.")
         return
 
     paris_time = datetime.datetime.now(ZoneInfo("Europe/Paris"))
     
-    # 1. Filtre Heure d'Hiver : Empêche le 1er cron (16h15 UTC = 17h15 FR) de tourner en hiver
+    # Filtre Heure d'Hiver : Empêche le 1er cron (16h15 UTC = 17h15 FR) de tourner en hiver
     if paris_time.hour < 18:
         print(f"⏰ Passage ignoré : Il est actuellement {paris_time.strftime('%H:%M')} à Paris. La veille est planifiée à partir de 18h15.")
         sys.exit(0)
 
-    # 2. Vérification de l'existence de la page Notion pour aujourd'hui
+    # Vérification de l'existence de la page Notion pour aujourd'hui
     date_str = paris_time.strftime("%d/%m/%Y")
     expected_title = f"Veille Tech - {date_str}"
 
@@ -80,6 +80,64 @@ def check_notion_duplicate():
                         sys.exit(0)
     except Exception as e:
         print(f"⚠️ Impossible de vérifier la présence de doublons sur Notion ({e}). Exécution maintenue par sécurité.")
+
+# ---------------------------------------------------------------------------
+# 0.b MÉMOIRE DE LA VEILLE D'HIER (DÉDOUBLONNAGE INTER-JOURS)
+# ---------------------------------------------------------------------------
+def get_yesterday_notion_summary():
+    """Récupère les sujets traités hier sur Notion pour éviter la répétition d'un jour à l'autre."""
+    paris_time = datetime.datetime.now(ZoneInfo("Europe/Paris"))
+    yesterday_str = (paris_time - datetime.timedelta(days=1)).strftime("%d/%m/%Y")
+    expected_title = f"Veille Tech - {yesterday_str}"
+
+    url = f"https://api.notion.com/v1/blocks/{NOTION_PAGE_ID}/children"
+    headers = {
+        "Authorization": f"Bearer {NOTION_API_TOKEN}",
+        "Notion-Version": "2022-06-28"
+    }
+
+    try:
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code != 200:
+            return ""
+
+        blocks = res.json().get("results", [])
+        yesterday_page_id = None
+        for block in blocks:
+            if block.get("type") == "child_page":
+                if block.get("child_page", {}).get("title", "") == expected_title:
+                    yesterday_page_id = block.get("id")
+                    break
+
+        if not yesterday_page_id:
+            print(f"ℹ️ Aucune veille trouvée pour hier ({expected_title}). Génération standard.")
+            return ""
+
+        res_page = requests.get(f"https://api.notion.com/v1/blocks/{yesterday_page_id}/children", headers=headers, timeout=5)
+        if res_page.status_code != 200:
+            return ""
+
+        child_blocks = res_page.json().get("results", [])
+        extracted_topics = []
+
+        for b in child_blocks:
+            b_type = b.get("type")
+            if b_type == "bulleted_list_item":
+                texts = [t.get("plain_text", "") for t in b.get("bulleted_list_item", {}).get("rich_text", [])]
+                if texts:
+                    extracted_topics.append(" ".join(texts))
+            elif b_type == "toggle":
+                texts = [t.get("plain_text", "") for t in b.get("toggle", {}).get("rich_text", [])]
+                if texts:
+                    extracted_topics.append(" ".join(texts))
+
+        summary_text = "\n".join(extracted_topics[:25])
+        print(f"📖 {len(extracted_topics)} points d'hier récupérés pour dédoublonnage inter-jours.")
+        return summary_text
+
+    except Exception as e:
+        print(f"⚠️ Impossible de lire la veille d'hier ({e}). Poursuite sans mémoire inter-jours.")
+        return ""
 
 # ---------------------------------------------------------------------------
 # NOTIFICATION TELEGRAM
@@ -105,7 +163,7 @@ def send_telegram(message):
             print(f"⚠️ Erreur lors de l'envoi Telegram : {e}")
 
 # ---------------------------------------------------------------------------
-# PARSER NOTION RICH TEXT (Conversion des liens [Nom](URL) -> Cliquables)
+# PARSER NOTION RICH TEXT
 # ---------------------------------------------------------------------------
 def parse_markdown_to_rich_text(text):
     text_clean = text.replace("**", "")
@@ -174,19 +232,30 @@ def collect_rss_articles():
     return articles, failed_feeds
 
 # ---------------------------------------------------------------------------
-# 2. SYNTHÈSE GEMINI (5 CATÉGORIES + TRI PAR URGENCE)
+# 2. SYNTHÈSE GEMINI (MÉMOIRE + TRI PAR URGENCE)
 # ---------------------------------------------------------------------------
-def generate_summary_with_gemini(articles):
-    print("🧠 Analyse, tri par urgence et synthèse par Gemini API...")
+def generate_summary_with_gemini(articles, yesterday_context=""):
+    print("🧠 Analyse, tri par urgence et dédoublonnage par Gemini API...")
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel("gemini-3.5-flash-lite")
     date_str = datetime.datetime.now(ZoneInfo("Europe/Paris")).strftime("%d/%m/%Y")
     news_context = "\n".join(articles)
 
+    yesterday_prompt_section = ""
+    if yesterday_context:
+        yesterday_prompt_section = f"""
+SUJETS ET ACTUALITÉS DÉJÀ TRAITÉS DANS LA VEILLE D'HIER :
+{yesterday_context}
+
+⚠️ RÈGLE DE DÉDOUBLONNAGE D'UN JOUR À L'AUTRE :
+Si une actualité brute du jour concerne EXACTEMENT le même événement, la même annonce ou la même faille que l'un des sujets traités hier ci-dessus, ÉLIMINE-LA et NE LA RETIENS PAS pour le rapport d'aujourd'hui (sauf s'il y a un développement majeur ou un correctif officiel publié aujourd'hui).
+"""
+
     prompt = f"""Tu es un assistant expert en veille technologique. Voici les actualités brutes récoltées aujourd'hui ({date_str}) :
 
 ACTUALITÉS BRUTES DU JOUR :
 {news_context}
+{yesterday_prompt_section}
 
 Analyse ces informations brutes et rédige la synthèse de la veille techno en français au format Markdown.
 
@@ -338,7 +407,8 @@ if __name__ == "__main__":
             print("ℹ️ Aucun article trouvé sur les dernières 24h.")
             send_telegram("ℹ️ Veille Tech : Aucun nouvel article publié sur les dernières 24h.")
         else:
-            summary_md = generate_summary_with_gemini(articles)
+            yesterday_context = get_yesterday_notion_summary()
+            summary_md = generate_summary_with_gemini(articles, yesterday_context)
             create_notion_journal_page(summary_md)
             print("🎉 Terminé avec succès !")
             

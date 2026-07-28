@@ -8,19 +8,6 @@ import feedparser
 import google.generativeai as genai
 
 # ---------------------------------------------------------------------------
-# 0. VERIFICATION DE L'HEURE LOCALE FR (06h14 HEURE DE PARIS)
-# ---------------------------------------------------------------------------
-def check_french_time():
-    """Garantit l'exécution uniquement s'il est 06h (heure de Paris), été comme hiver."""
-    paris_time = datetime.datetime.now(ZoneInfo("Europe/Paris"))
-    is_manual = os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
-    
-    # En cas d'exécution automatique par le CRON, on ne s'exécute qu'à 06h (heure de Paris)
-    if not is_manual and paris_time.hour != 6:
-        print(f"⏰ Passage ignoré : Il est actuellement {paris_time.strftime('%H:%M')} à Paris. Le script s'exécutera à 06h14.")
-        sys.exit(0)
-
-# ---------------------------------------------------------------------------
 # CONFIGURATION & SECRETS
 # ---------------------------------------------------------------------------
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -31,7 +18,6 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # Liste des 19 flux RSS de référence
 RSS_FEEDS = [
-    # Presse IT & Généraliste
     "https://www.it-connect.fr/feed/",
     "https://www.lemondeinformatique.fr/flux-rss/rss.xml",
     "https://www.numerama.com/tech/feed/",
@@ -52,6 +38,48 @@ RSS_FEEDS = [
     "https://github.blog/feed/",               
     "https://www.omgubuntu.co.uk/feed"           
 ]
+
+# ---------------------------------------------------------------------------
+# 0. SÉCURITÉ HORAIRE & DÉDOUBLONNAGE DYNAMIQUE NOTION (OPTION B)
+# ---------------------------------------------------------------------------
+def check_notion_duplicate():
+    """Vérifie l'heure locale (>= 18h) et s'assure qu'aucun doublon n'existe sur Notion."""
+    is_manual = os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
+    
+    # En cas d'exécution manuelle, on force le lancement
+    if is_manual:
+        print("🚀 Lancement manuel détecté (Workflow Dispatch) : Contournement du filtre d'existence.")
+        return
+
+    paris_time = datetime.datetime.now(ZoneInfo("Europe/Paris"))
+    
+    # 1. Filtre Heure d'Hiver : Empêche le 1er cron (16h15 UTC = 17h15 FR) de tourner en hiver
+    if paris_time.hour < 18:
+        print(f"⏰ Passage ignoré : Il est actuellement {paris_time.strftime('%H:%M')} à Paris. La veille est planifiée à partir de 18h15.")
+        sys.exit(0)
+
+    # 2. Vérification de l'existence de la page Notion pour aujourd'hui
+    date_str = paris_time.strftime("%d/%m/%Y")
+    expected_title = f"Veille Tech - {date_str}"
+
+    url = f"https://api.notion.com/v1/blocks/{NOTION_PAGE_ID}/children"
+    headers = {
+        "Authorization": f"Bearer {NOTION_API_TOKEN}",
+        "Notion-Version": "2022-06-28"
+    }
+
+    try:
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            blocks = res.json().get("results", [])
+            for block in blocks:
+                if block.get("type") == "child_page":
+                    title = block.get("child_page", {}).get("title", "")
+                    if title == expected_title:
+                        print(f"🛑 Une page Notion existe déjà pour aujourd'hui ({expected_title}). Passage du 2nd cron ignoré.")
+                        sys.exit(0)
+    except Exception as e:
+        print(f"⚠️ Impossible de vérifier la présence de doublons sur Notion ({e}). Exécution maintenue par sécurité.")
 
 # ---------------------------------------------------------------------------
 # NOTIFICATION TELEGRAM
@@ -104,7 +132,7 @@ def parse_markdown_to_rich_text(text):
     return rich_text if rich_text else [{"type": "text", "text": {"content": text_clean}}]
 
 # ---------------------------------------------------------------------------
-# 1. COLLECTE RSS
+# 1. COLLECTE RSS (24H GLISSANTES)
 # ---------------------------------------------------------------------------
 def collect_rss_articles():
     print("📡 Collecte des flux RSS...")
@@ -142,7 +170,7 @@ def collect_rss_articles():
             failed_feeds.append(url)
             continue
 
-    print(f"✅ {len(articles)} articles pertinents collectés sur 24h.")
+    print(f"✅ {len(articles)} articles pertinents collectés sur les dernières 24h.")
     return articles, failed_feeds
 
 # ---------------------------------------------------------------------------
@@ -152,7 +180,7 @@ def generate_summary_with_gemini(articles):
     print("🧠 Analyse, tri par urgence et synthèse par Gemini API...")
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel("gemini-3.5-flash-lite")
-    date_str = datetime.datetime.now().strftime("%d/%m/%Y")
+    date_str = datetime.datetime.now(ZoneInfo("Europe/Paris")).strftime("%d/%m/%Y")
     news_context = "\n".join(articles)
 
     prompt = f"""Tu es un assistant expert en veille technologique. Voici les actualités brutes récoltées aujourd'hui ({date_str}) :
@@ -209,11 +237,11 @@ STRUCTURE EXACTE À RESPECTER :
     return response.text
 
 # ---------------------------------------------------------------------------
-# 3. CRÉATION NOTION
+# 3. CRÉATION PAGE NOTION
 # ---------------------------------------------------------------------------
 def create_notion_journal_page(markdown_text):
     print("📝 Injection du rapport dans Notion...")
-    date_str = datetime.datetime.now().strftime("%d/%m/%Y")
+    date_str = datetime.datetime.now(ZoneInfo("Europe/Paris")).strftime("%d/%m/%Y")
     sections = re.split(r'\n(?=## )', markdown_text)
     children_blocks = []
 
@@ -303,18 +331,18 @@ def create_notion_journal_page(markdown_text):
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     try:
-        check_french_time()
+        check_notion_duplicate()
         articles, failed_feeds = collect_rss_articles()
         
         if not articles:
-            print("ℹ️ Aucun article trouvé sur 24h.")
+            print("ℹ️ Aucun article trouvé sur les dernières 24h.")
             send_telegram("ℹ️ Veille Tech : Aucun nouvel article publié sur les dernières 24h.")
         else:
             summary_md = generate_summary_with_gemini(articles)
             create_notion_journal_page(summary_md)
             print("🎉 Terminé avec succès !")
             
-            date_now = datetime.datetime.now().strftime("%d/%m/%Y")
+            date_now = datetime.datetime.now(ZoneInfo("Europe/Paris")).strftime("%d/%m/%Y")
             msg = f"✅ Veille Tech du {date_now} disponible sur ton Notion !"
             if failed_feeds:
                 msg += f"\n\n⚠️ Note : {len(failed_feeds)} flux RSS n'a/ont pas répondu aujourd'hui."

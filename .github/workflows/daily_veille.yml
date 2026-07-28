@@ -2,15 +2,17 @@ name: Daily Tech Watch Automation
 
 on:
   schedule:
-    - cron: '14 4 * * *' # 04h14 UTC (05h14 Hiver / 06h14 Été FR)
-    - cron: '14 5 * * *' # 05h14 UTC (06h14 Hiver FR)
+    # 16h15 UTC = 18h15 FR en heure d'été (UTC+2)
+    - cron: '15 16 * * *'
+    # 17h15 UTC = 18h15 FR en heure d'hiver (UTC+1)
+    - cron: '15 17 * * *'
   workflow_dispatch:
 
 jobs:
   run-veille:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Python

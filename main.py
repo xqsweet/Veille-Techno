@@ -86,7 +86,7 @@ RSS_FEEDS = [
     "https://www.presse-citron.net/feed/",
     "https://siecledigital.fr/feed/",
     "https://www.01net.com/actualites/feed/",
-    "https://next.ink/feed/",
+    "https://www.macg.co/rss",
     "https://linuxfr.org/news.atom",
 ]
 

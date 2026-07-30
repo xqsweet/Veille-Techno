@@ -178,6 +178,30 @@ async def collect_rss_articles_async():
 # ---------------------------------------------------------------------------
 # 4. MEMOIRE NOTION J-1 & NETTOYAGE AUTO J
 # ---------------------------------------------------------------------------
+def clear_notion_page_blocks(page_id, headers):
+    """Vide l'intégralité des blocs contenus dans une page Notion."""
+    has_more = True
+    next_cursor = None
+    while has_more:
+        url = f"https://api.notion.com/v1/blocks/{page_id}/children?page_size=100"
+        if next_cursor:
+            url += f"&start_cursor={next_cursor}"
+        res = requests.get(url, headers=headers)
+        if res.status_code == 200:
+            data = res.json()
+            blocks = data.get("results", [])
+            has_more = data.get("has_more", False)
+            next_cursor = data.get("next_cursor")
+            for block in blocks:
+                b_id = block["id"]
+                try:
+                    requests.delete(f"https://api.notion.com/v1/blocks/{b_id}", headers=headers)
+                except Exception as e:
+                    print(f"⚠️ [NOTION CLEAR BLOCK ERROR] {b_id} : {e}")
+        else:
+            break
+    print(f"🧹 [NOTION] Blocs de la page {page_id} nettoyés.")
+
 def manage_notion_pages(today_str, yesterday_str):
     notion_token = os.getenv("NOTION_TOKEN") or os.getenv("NOTION_API_TOKEN")
     parent_id = os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PAGE_ID")
@@ -188,6 +212,7 @@ def manage_notion_pages(today_str, yesterday_str):
     }
 
     memory_j_minus_1 = ""
+    existing_today_page_id = None
 
     # Mode Page Parent
     blocks_url = f"https://api.notion.com/v1/blocks/{parent_id}/children?page_size=100"
@@ -200,8 +225,9 @@ def manage_notion_pages(today_str, yesterday_str):
                 title = block.get("child_page", {}).get("title", "")
                 page_id = block["id"]
                 if title == f"Veille Tech - {today_str}":
-                    requests.delete(f"https://api.notion.com/v1/blocks/{page_id}", headers=headers)
-                    print(f"🧹 [NOTION] Ancienne page du jour ({today_str}) supprimée.")
+                    existing_today_page_id = page_id
+                    clear_notion_page_blocks(page_id, headers)
+                    print(f"♻️ [NOTION] Ancienne page du jour ({today_str}) conservée et réinitialisée.")
                 elif title == f"Veille Tech - {yesterday_str}":
                     b_resp = requests.get(f"https://api.notion.com/v1/blocks/{page_id}/children", headers=headers)
                     if b_resp.status_code == 200:
@@ -231,8 +257,9 @@ def manage_notion_pages(today_str, yesterday_str):
         if resp.status_code == 200:
             for page in resp.json().get("results", []):
                 page_id = page["id"]
-                requests.delete(f"https://api.notion.com/v1/blocks/{page_id}", headers=headers)
-                print(f"🧹 [NOTION] Ancienne page du jour ({today_str}) supprimée.")
+                existing_today_page_id = page_id
+                clear_notion_page_blocks(page_id, headers)
+                print(f"♻️ [NOTION] Ancienne page du jour ({today_str}) conservée et réinitialisée.")
 
         payload_yesterday = {
             "filter": {
@@ -265,7 +292,7 @@ def manage_notion_pages(today_str, yesterday_str):
     if not memory_j_minus_1:
         print("ℹ️ [NOTION] Aucun historique J-1 disponible.")
 
-    return memory_j_minus_1
+    return memory_j_minus_1, existing_today_page_id
 
 # ---------------------------------------------------------------------------
 # 5. SYNTHESE GEMINI
@@ -413,7 +440,7 @@ def execute_notion_request_with_retry(method, url, headers, json_payload, max_re
 # ---------------------------------------------------------------------------
 # 7. CREATION PAGE NOTION
 # ---------------------------------------------------------------------------
-def create_notion_journal_page(today_str, gemini_data, failed_feeds):
+def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_page_id=None):
     notion_token = os.getenv("NOTION_TOKEN") or os.getenv("NOTION_API_TOKEN")
     parent_id = os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PAGE_ID")
 
@@ -491,22 +518,24 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds):
                         "children": [
                             {
                                 "object": "block",
-                                "type": "bulleted_list_item",
-                                "bulleted_list_item": {
+                                "type": "paragraph",
+                                "paragraph": {
                                     "rich_text": [{"type": "text", "text": {"content": "📝 Résumé : "}, "annotations": {"bold": True}}] + summary_rich
                                 }
                             },
                             {
                                 "object": "block",
-                                "type": "bulleted_list_item",
-                                "bulleted_list_item": {
-                                    "rich_text": [{"type": "text", "text": {"content": "💡 Pourquoi c'est important : "}, "annotations": {"bold": True}}] + impact_rich
+                                "type": "paragraph",
+                                "paragraph": {
+                                    "rich_text": [
+                                        {"type": "text", "text": {"content": "💡 Impact : "}, "annotations": {"bold": True}}
+                                    ] + impact_rich
                                 }
                             },
                             {
                                 "object": "block",
-                                "type": "bulleted_list_item",
-                                "bulleted_list_item": {
+                                "type": "paragraph",
+                                "paragraph": {
                                     "rich_text": [
                                         {"type": "text", "text": {"content": "🔗 Source : "}, "annotations": {"bold": True}},
                                         {"type": "text", "text": {"content": source_name, "link": {"url": source_url}}} if source_url else {"type": "text", "text": {"content": source_name}}
@@ -528,41 +557,54 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds):
             }
             all_blocks.append(toggle_block)
 
-    first_chunk = all_blocks[:100]
-    remaining_chunks = [all_blocks[i:i + 100] for i in range(100, len(all_blocks), 100)]
+    chunks = [all_blocks[i:i + 100] for i in range(0, len(all_blocks), 100)]
 
-    page_payload = {
-        "parent": {"page_id": parent_id},
-        "properties": {
-            "title": [{"text": {"content": f"Veille Tech - {today_str}"}}]
-        },
-        "children": first_chunk
-    }
+    if existing_page_id:
+        print(f"♻️ [NOTION] Réinjection des blocs dans la page existante ({existing_page_id})...")
+        page_id = existing_page_id
+        page_res = requests.get(f"https://api.notion.com/v1/pages/{page_id}", headers=headers)
+        page_url = page_res.json().get("url", "") if page_res.status_code == 200 else f"https://notion.so/{page_id.replace('-', '')}"
+        
+        for idx, chunk in enumerate(chunks, 1):
+            print(f"📦 [NOTION] Ingestion du paquet #{idx} ({len(chunk)} blocks)...")
+            patch_url = f"https://api.notion.com/v1/blocks/{page_id}/children"
+            execute_notion_request_with_retry("PATCH", patch_url, headers, {"children": chunk})
+    else:
+        first_chunk = chunks[0] if chunks else []
+        remaining_chunks = chunks[1:] if len(chunks) > 1 else []
 
-    print("📝 [NOTION] Création de la page Notion...")
-    try:
-        res = execute_notion_request_with_retry("POST", "https://api.notion.com/v1/pages", headers, page_payload, max_retries=1)
-    except Exception:
-        print("🔄 [NOTION] Bascule sur le mode Database Parent...")
-        db_payload = {
-            "parent": {"database_id": parent_id},
+        page_payload = {
+            "parent": {"page_id": parent_id},
             "properties": {
-                "Name": {"title": [{"text": {"content": f"Veille Tech - {today_str}"}}]}
+                "title": [{"text": {"content": f"Veille Tech - {today_str}"}}]
             },
             "children": first_chunk
         }
-        res = execute_notion_request_with_retry("POST", "https://api.notion.com/v1/pages", headers, db_payload, max_retries=3)
 
-    page_data = res.json()
-    page_id = page_data.get("id")
-    page_url = page_data.get("url", "")
+        print("📝 [NOTION] Création de la page Notion...")
+        try:
+            res = execute_notion_request_with_retry("POST", "https://api.notion.com/v1/pages", headers, page_payload, max_retries=1)
+        except Exception:
+            print("🔄 [NOTION] Bascule sur le mode Database Parent...")
+            db_payload = {
+                "parent": {"database_id": parent_id},
+                "properties": {
+                    "Name": {"title": [{"text": {"content": f"Veille Tech - {today_str}"}}]}
+                },
+                "children": first_chunk
+            }
+            res = execute_notion_request_with_retry("POST", "https://api.notion.com/v1/pages", headers, db_payload, max_retries=3)
 
-    for idx, chunk in enumerate(remaining_chunks, 1):
-        print(f"📦 [NOTION] Ingestion du paquet supplémentaire #{idx} ({len(chunk)} blocks)...")
-        patch_url = f"https://api.notion.com/v1/blocks/{page_id}/children"
-        execute_notion_request_with_retry("PATCH", patch_url, headers, {"children": chunk})
+        page_data = res.json()
+        page_id = page_data.get("id")
+        page_url = page_data.get("url", "")
 
-    print(f"✅ [NOTION] Page Notion créée avec succès ! URL : {page_url}")
+        for idx, chunk in enumerate(remaining_chunks, 1):
+            print(f"📦 [NOTION] Ingestion du paquet supplémentaire #{idx} ({len(chunk)} blocks)...")
+            patch_url = f"https://api.notion.com/v1/blocks/{page_id}/children"
+            execute_notion_request_with_retry("PATCH", patch_url, headers, {"children": chunk})
+
+    print(f"✅ [NOTION] Page Notion mise à jour avec succès ! URL : {page_url}")
     return page_url, reading_time
 
 # ---------------------------------------------------------------------------
@@ -618,11 +660,11 @@ def main():
     today_str = paris_time.strftime("%d/%m/%Y")
     yesterday_str = (paris_time - datetime.timedelta(days=1)).strftime("%d/%m/%Y")
 
-    memory_j_minus_1 = manage_notion_pages(today_str, yesterday_str)
+    memory_j_minus_1, existing_today_page_id = manage_notion_pages(today_str, yesterday_str)
     raw_articles, failed_feeds = asyncio.run(collect_rss_articles_async())
     gemini_data = process_with_gemini(raw_articles, memory_j_minus_1)
 
-    page_url, reading_time = create_notion_journal_page(today_str, gemini_data, failed_feeds)
+    page_url, reading_time = create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_page_id=existing_today_page_id)
 
     articles_count = len(gemini_data.get("articles", []))
     tags = gemini_data.get("tags", [])

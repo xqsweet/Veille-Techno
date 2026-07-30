@@ -36,7 +36,8 @@ RSS_FEEDS = [
     "https://www.cncf.io/feed/",              
     "https://huggingface.co/blog/feed.xml",     
     "https://github.blog/feed/",               
-    "https://www.omgubuntu.co.uk/feed"           
+    "https://www.omgubuntu.co.uk/feed",
+    "https://www.frandroid.com/feed"           
 ]
 
 # ---------------------------------------------------------------------------

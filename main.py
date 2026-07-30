@@ -18,15 +18,19 @@ import google.generativeai as genai
 def preflight_check():
     """
     Vérifie la présence des 5 secrets GitHub indispensables au démarrage.
+    Compatible avec les anciens et nouveaux noms de secrets.
     """
-    required_env_vars = [
-        "GEMINI_API_KEY",
-        "NOTION_TOKEN",
-        "NOTION_DATABASE_ID",
-        "TELEGRAM_BOT_TOKEN",
-        "TELEGRAM_CHAT_ID",
-    ]
-    missing = [var for var in required_env_vars if not os.getenv(var)]
+    notion_token = os.getenv("NOTION_TOKEN") or os.getenv("NOTION_API_TOKEN")
+    notion_id = os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PAGE_ID")
+
+    required = {
+        "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY"),
+        "NOTION_TOKEN (ou NOTION_API_TOKEN)": notion_token,
+        "NOTION_DATABASE_ID (ou NOTION_PAGE_ID)": notion_id,
+        "TELEGRAM_BOT_TOKEN": os.getenv("TELEGRAM_BOT_TOKEN"),
+        "TELEGRAM_CHAT_ID": os.getenv("TELEGRAM_CHAT_ID"),
+    }
+    missing = [k for k, v in required.items() if not v]
     if missing:
         print(f"❌ [CRITICAL] Variables d'environnement manquantes : {', '.join(missing)}")
         sys.exit(1)
@@ -152,7 +156,6 @@ async def collect_rss_articles_async():
                 elif hasattr(entry, "updated_parsed") and entry.updated_parsed:
                     pub_date = datetime.datetime(*entry.updated_parsed[:6], tzinfo=datetime.timezone.utc)
 
-                # Conservé si publié dans les 24h ou si la date n'est pas détectable (par précaution)
                 if pub_date is None or pub_date >= cutoff_time:
                     title = entry.get("title", "Sans titre")
                     link = entry.get("link", url)
@@ -177,61 +180,89 @@ async def collect_rss_articles_async():
 # 4. MEMOIRE NOTION J-1 & NETTOYAGE AUTO J
 # ---------------------------------------------------------------------------
 def manage_notion_pages(today_str, yesterday_str):
-    notion_token = os.getenv("NOTION_TOKEN")
-    database_id = os.getenv("NOTION_DATABASE_ID")
+    notion_token = os.getenv("NOTION_TOKEN") or os.getenv("NOTION_API_TOKEN")
+    parent_id = os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PAGE_ID")
     headers = {
         "Authorization": f"Bearer {notion_token}",
         "Notion-Version": "2022-06-28",
         "Content-Type": "application/json"
     }
 
-    # 1. Archiver l'ancienne page d'aujourd'hui (J) si elle existe (relance manuelle)
-    query_url = f"https://api.notion.com/v1/databases/{database_id}/query"
-    payload_today = {
-        "filter": {
-            "and": [
-                {"property": "Name", "title": {"equals": f"Veille Tech - {today_str}"}},
-                {"archived": False}
-            ]
-        }
-    }
-    resp = requests.post(query_url, headers=headers, json=payload_today)
-    if resp.status_code == 200:
-        for page in resp.json().get("results", []):
-            page_id = page["id"]
-            archive_url = f"https://api.notion.com/v1/pages/{page_id}"
-            requests.patch(archive_url, headers=headers, json={"archived": True})
-            print(f"🧹 [NOTION] Ancienne page du jour ({today_str}) archivée pour remplacement.")
-
-    # 2. Chercher la page non-archivée d'hier (J-1) pour la mémoire IA
     memory_j_minus_1 = ""
-    payload_yesterday = {
-        "filter": {
-            "and": [
-                {"property": "Name", "title": {"equals": f"Veille Tech - {yesterday_str}"}},
-                {"archived": False}
-            ]
+
+    # 1. Tenter d'inspecter en tant que Page Parent
+    blocks_url = f"https://api.notion.com/v1/blocks/{parent_id}/children?page_size=100"
+    resp = requests.get(blocks_url, headers=headers)
+
+    if resp.status_code == 200:
+        results = resp.json().get("results", [])
+        for block in results:
+            if block.get("type") == "child_page":
+                title = block.get("child_page", {}).get("title", "")
+                page_id = block["id"]
+                if title == f"Veille Tech - {today_str}":
+                    requests.patch(f"https://api.notion.com/v1/pages/{page_id}", headers=headers, json={"archived": True})
+                    print(f"🧹 [NOTION] Ancienne page du jour ({today_str}) archivée.")
+                elif title == f"Veille Tech - {yesterday_str}":
+                    b_resp = requests.get(f"https://api.notion.com/v1/blocks/{page_id}/children", headers=headers)
+                    if b_resp.status_code == 200:
+                        blocks = b_resp.json().get("results", [])
+                        lines = []
+                        for b in blocks[:20]:
+                            b_type = b.get("type")
+                            if b_type and b_type in b:
+                                text_items = b[b_type].get("rich_text", [])
+                                t_str = "".join([t.get("plain_text", "") for t in text_items])
+                                if t_str:
+                                    lines.append(t_str)
+                        memory_j_minus_1 = "\n".join(lines)[:1500]
+                        print(f"🧠 [NOTION] Mémoire J-1 chargée depuis Notion ({len(memory_j_minus_1)} caractères).")
+    else:
+        # Fallback : Mode Database Query
+        query_url = f"https://api.notion.com/v1/databases/{parent_id}/query"
+        payload_today = {
+            "filter": {
+                "and": [
+                    {"property": "Name", "title": {"equals": f"Veille Tech - {today_str}"}},
+                    {"archived": False}
+                ]
+            }
         }
-    }
-    resp_y = requests.post(query_url, headers=headers, json=payload_yesterday)
-    if resp_y.status_code == 200:
-        results_y = resp_y.json().get("results", [])
-        if results_y:
-            yesterday_page_id = results_y[0]["id"]
-            blocks_url = f"https://api.notion.com/v1/blocks/{yesterday_page_id}/children"
-            b_resp = requests.get(blocks_url, headers=headers)
-            if b_resp.status_code == 200:
-                blocks = b_resp.json().get("results", [])
-                lines = []
-                for b in blocks[:20]:
-                    b_type = b.get("type")
-                    if b_type and b_type in b:
-                        text_items = b[b_type].get("rich_text", [])
-                        t_str = "".join([t.get("plain_text", "") for t in text_items])
-                        if t_str:
-                            lines.append(t_str)
-                memory_j_minus_1 = "\n".join(lines)[:1500]
-                print(f"🧠 [NOTION] Mémoire J-1 chargée depuis Notion ({len(memory_j_minus_1)} caractères).")
+        resp = requests.post(query_url, headers=headers, json=payload_today)
+        if resp.status_code == 200:
+            for page in resp.json().get("results", []):
+                page_id = page["id"]
+                archive_url = f"https://api.notion.com/v1/pages/{page_id}"
+                requests.patch(archive_url, headers=headers, json={"archived": True})
+                print(f"🧹 [NOTION] Ancienne page du jour ({today_str}) archivée.")
+
+        payload_yesterday = {
+            "filter": {
+                "and": [
+                    {"property": "Name", "title": {"equals": f"Veille Tech - {yesterday_str}"}},
+                    {"archived": False}
+                ]
+            }
+        }
+        resp_y = requests.post(query_url, headers=headers, json=payload_yesterday)
+        if resp_y.status_code == 200:
+            results_y = resp_y.json().get("results", [])
+            if results_y:
+                yesterday_page_id = results_y[0]["id"]
+                blocks_url_y = f"https://api.notion.com/v1/blocks/{yesterday_page_id}/children"
+                b_resp = requests.get(blocks_url_y, headers=headers)
+                if b_resp.status_code == 200:
+                    blocks = b_resp.json().get("results", [])
+                    lines = []
+                    for b in blocks[:20]:
+                        b_type = b.get("type")
+                        if b_type and b_type in b:
+                            text_items = b[b_type].get("rich_text", [])
+                            t_str = "".join([t.get("plain_text", "") for t in text_items])
+                            if t_str:
+                                lines.append(t_str)
+                    memory_j_minus_1 = "\n".join(lines)[:1500]
+                    print(f"🧠 [NOTION] Mémoire J-1 chargée depuis Notion ({len(memory_j_minus_1)} caractères).")
 
     if not memory_j_minus_1:
         print("ℹ️ [NOTION] Aucun historique J-1 disponible.")
@@ -313,9 +344,6 @@ Réponds EXCLUSIVEMENT sous forme d'un objet JSON strict respectant la structure
 # 6. HELPERS RENDU NOTION (RICH TEXT, CHUNKING, RETRIES)
 # ---------------------------------------------------------------------------
 def parse_markdown_to_rich_text(text):
-    """
-    Transforme du Markdown basique (**gras**, [lien](url)) en Rich Text Notion.
-    """
     rich_text = []
     pattern = r"(\*\*.+?\*\*|\[.+?\]\(https?://[^\s\)]+\))"
     tokens = re.split(pattern, text)
@@ -363,11 +391,11 @@ def execute_notion_request_with_retry(method, url, headers, json_payload, max_re
     raise Exception(f"❌ [NOTION API] Impossible d'exécuter la requête {method} sur {url}")
 
 # ---------------------------------------------------------------------------
-# 7. CREATION PAGE NOTION DYNAMIQUE
+# 7. CREATION PAGE NOTION DYNAMIQUE (PAGE ID & DATABASE ID COMPATIBLE)
 # ---------------------------------------------------------------------------
 def create_notion_journal_page(today_str, gemini_data, failed_feeds):
-    notion_token = os.getenv("NOTION_TOKEN")
-    database_id = os.getenv("NOTION_DATABASE_ID")
+    notion_token = os.getenv("NOTION_TOKEN") or os.getenv("NOTION_API_TOKEN")
+    parent_id = os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PAGE_ID")
 
     headers = {
         "Authorization": f"Bearer {notion_token}",
@@ -378,7 +406,6 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds):
     articles = gemini_data.get("articles", [])
     tags = gemini_data.get("tags", [])
 
-    # Algorithme mathématique Python exact pour le temps de lecture
     total_words = 0
     for a in articles:
         total_words += len(a.get("summary", "").split())
@@ -386,7 +413,6 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds):
     
     reading_time = max(1, math.ceil(total_words / 200)) if articles else 0
 
-    # Header Callout Block
     callout_text = f"⏱️ Temps de lecture estimé : {reading_time} min\n"
     if tags:
         callout_text += f"🏷️ Mots-clés du jour : {' '.join(tags)}"
@@ -404,7 +430,6 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds):
 
     all_blocks = [header_callout]
 
-    # Cas 0 article
     if not articles:
         no_article_block = {
             "object": "block",
@@ -415,7 +440,6 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds):
         }
         all_blocks.append(no_article_block)
     else:
-        # Groupement par catégories
         grouped = {}
         for a in articles:
             raw_cat = str(a.get("category", "")).upper().strip()
@@ -424,7 +448,6 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds):
 
         urgency_order = {"CRITIQUE": 1, "ÉVOLUTION": 2, "INFO": 3}
 
-        # Construction des Toggles avec sous-indentation (Rendu 1)
         for cat_name in sorted(grouped.keys()):
             cat_articles = grouped[cat_name]
             cat_articles.sort(key=lambda x: urgency_order.get(str(x.get("urgency", "")).upper(), 99))
@@ -485,22 +508,33 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds):
             }
             all_blocks.append(toggle_block)
 
-    # -----------------------------------------------------------------------
-    # CHUNKING PAR PAQUETS DE 100 BLOCKS MAXIMUM
-    # -----------------------------------------------------------------------
     first_chunk = all_blocks[:100]
     remaining_chunks = [all_blocks[i:i + 100] for i in range(100, len(all_blocks), 100)]
 
+    # 1. Tester en mode Page Parent (création de sous-page)
     page_payload = {
-        "parent": {"database_id": database_id},
+        "parent": {"page_id": parent_id},
         "properties": {
-            "Name": {"title": [{"text": {"content": f"Veille Tech - {today_str}"}}]}
+            "title": [{"text": {"content": f"Veille Tech - {today_str}"}}]
         },
         "children": first_chunk
     }
 
     print("📝 [NOTION] Création de la page Notion...")
-    res = execute_notion_request_with_retry("POST", "https://api.notion.com/v1/pages", headers, page_payload)
+    try:
+        res = execute_notion_request_with_retry("POST", "https://api.notion.com/v1/pages", headers, page_payload, max_retries=1)
+    except Exception:
+        # 2. Fallback si c'est une Base de données
+        print("🔄 [NOTION] Bascule sur le mode Database Parent...")
+        db_payload = {
+            "parent": {"database_id": parent_id},
+            "properties": {
+                "Name": {"title": [{"text": {"content": f"Veille Tech - {today_str}"}}]}
+            },
+            "children": first_chunk
+        }
+        res = execute_notion_request_with_retry("POST", "https://api.notion.com/v1/pages", headers, db_payload, max_retries=3)
+
     page_data = res.json()
     page_id = page_data.get("id")
     page_url = page_data.get("url", "")
@@ -559,31 +593,20 @@ def send_telegram_notification(today_str, page_url, article_count, reading_time,
 def main():
     print("🚀 [START] Lancement du pipeline de Veille Technologique...")
 
-    # Step 1: Pre-flight Check
     preflight_check()
-
-    # Step 2: French Time Check (18h FR)
     check_french_time()
 
-    # Dates
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     paris_time = now_utc.astimezone(ZoneInfo("Europe/Paris"))
     today_str = paris_time.strftime("%d/%m/%Y")
     yesterday_str = (paris_time - datetime.timedelta(days=1)).strftime("%d/%m/%Y")
 
-    # Step 3: Manage Notion Pages (Clean Today $J$, Fetch Yesterday $J-1$)
     memory_j_minus_1 = manage_notion_pages(today_str, yesterday_str)
-
-    # Step 4: Collect RSS Feeds Async
     raw_articles, failed_feeds = asyncio.run(collect_rss_articles_async())
-
-    # Step 5: Process with Gemini (Structured JSON)
     gemini_data = process_with_gemini(raw_articles, memory_j_minus_1)
 
-    # Step 6: Create Notion Page
     page_url, reading_time = create_notion_journal_page(today_str, gemini_data, failed_feeds)
 
-    # Step 7: Send Telegram Notification
     articles_count = len(gemini_data.get("articles", []))
     tags = gemini_data.get("tags", [])
     send_telegram_notification(today_str, page_url, articles_count, reading_time, tags, failed_feeds)

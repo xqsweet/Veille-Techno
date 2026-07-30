@@ -75,9 +75,9 @@ RSS_FEEDS = [
     "https://feeds.feedburner.com/TheHackersNews",
     "https://aws.amazon.com/blogs/aws/feed/",
     "https://techcrunch.com/feed/",
-    "https://www.linuxtricks.fr/news/rss.xml",  # Remplacement de Phoronix
+    "https://www.linuxtricks.fr/news/rss.xml",
     "https://www.cert.ssi.gouv.fr/feed/",
-    "https://kubernetes.io/feed.xml",          # Remplacement de CNCF
+    "https://kubernetes.io/feed.xml",
     "https://huggingface.co/blog/feed.xml",
     "https://github.blog/feed/",
     "https://www.omgubuntu.co.uk/feed",

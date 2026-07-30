@@ -200,8 +200,8 @@ def manage_notion_pages(today_str, yesterday_str):
                 title = block.get("child_page", {}).get("title", "")
                 page_id = block["id"]
                 if title == f"Veille Tech - {today_str}":
-                    requests.patch(f"https://api.notion.com/v1/pages/{page_id}", headers=headers, json={"archived": True})
-                    print(f"🧹 [NOTION] Ancienne page du jour ({today_str}) archivée.")
+                    requests.delete(f"https://api.notion.com/v1/blocks/{page_id}", headers=headers)
+                    print(f"🧹 [NOTION] Ancienne page du jour ({today_str}) supprimée.")
                 elif title == f"Veille Tech - {yesterday_str}":
                     b_resp = requests.get(f"https://api.notion.com/v1/blocks/{page_id}/children", headers=headers)
                     if b_resp.status_code == 200:
@@ -231,9 +231,8 @@ def manage_notion_pages(today_str, yesterday_str):
         if resp.status_code == 200:
             for page in resp.json().get("results", []):
                 page_id = page["id"]
-                archive_url = f"https://api.notion.com/v1/pages/{page_id}"
-                requests.patch(archive_url, headers=headers, json={"archived": True})
-                print(f"🧹 [NOTION] Ancienne page du jour ({today_str}) archivée.")
+                requests.delete(f"https://api.notion.com/v1/blocks/{page_id}", headers=headers)
+                print(f"🧹 [NOTION] Ancienne page du jour ({today_str}) supprimée.")
 
         payload_yesterday = {
             "filter": {

@@ -282,7 +282,29 @@ def process_with_gemini(articles, memory_j_minus_1):
     for idx, a in enumerate(articles, 1):
         articles_text += f"[{idx}] Source: {a['source']} | Titre: {a['title']} | Date: {a['pub_date']}\nExtrait: {a['summary']}\nLien: {a['link']}\n\n"
 
+    SYSTEM_PROMPT = """
+RÈGLES STRICTES DE CRITICITÉ (🔴 / 🟠 / 🟢) :
+Sois extrêmement SÉVÈRE et SÉLECTIF. Ne colle PAS du rouge partout !
+
+🔴 [CRITIQUE] (Max 1 à 2 articles par jour MAXIMUM dans TOUT le journal) :
+- Réservé EXCLUSIVEMENT aux failles Zero-Day activement exploitées dans le monde, aux piratages majeurs d'infrastructures critiques, ou aux pannes mondiales d'acteurs majeurs (AWS, Cloudflare, Microsoft 365).
+- Si une faille nécessite un accès physique ou un scénario improbable, ce N'EST PAS critique.
+
+🟠 [ÉVOLUTION] (Urgence moyenne / Actualité importante) :
+- Patchs de sécurité mensuels (Patch Tuesday, Chrome/Safari updates).
+- Mises à jour majeures de frameworks, OS (iOS, Android, Windows) ou modèles d'IA.
+- Rachets d'entreprises Tech majeures ou nouvelles réglementations (RGPD, AI Act).
+
+🟢 [INFO] (Veille classique / Culture Tech) :
+- Annonces de nouveaux gadgets/smartphones, sorties de bêtas.
+- Outils open-source, tutoriels, astuces de dev/sysadmin.
+- Articles de réflexion, nouveautés mineures d'applications.
+"""
+
     prompt = f"""Tu es un Tech Lead expert en veille informatique (SysAdmin, Cloud, Cyber, Dev, AI, Consumer Tech).
+
+{SYSTEM_PROMPT}
+
 Voici une liste d'articles bruts collectés aujourd'hui sur divers flux RSS :
 
 {articles_text}

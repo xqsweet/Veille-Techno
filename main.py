@@ -221,9 +221,24 @@ def manage_notion_pages(today_str, yesterday_str):
     if resp.status_code == 200:
         results = resp.json().get("results", [])
         for block in results:
-            if block.get("type") == "child_page":
+            b_type = block.get("type")
+            b_id = block["id"]
+
+            # Nettoyage des blocs de paragraphes vides parasites dans la page parent
+            if b_type == "paragraph":
+                rich_text = block.get("paragraph", {}).get("rich_text", [])
+                plain_text = "".join([t.get("plain_text", "") for t in rich_text]).strip()
+                if not plain_text:
+                    try:
+                        requests.delete(f"https://api.notion.com/v1/blocks/{b_id}", headers=headers)
+                        print(f"🧹 [NOTION] Bloc paragraphe vide parasite ({b_id}) supprimé de la page parent.")
+                    except Exception as e:
+                        print(f"⚠️ [NOTION DELETE ERROR] {b_id} : {e}")
+                    continue
+
+            if b_type == "child_page":
                 title = block.get("child_page", {}).get("title", "")
-                page_id = block["id"]
+                page_id = b_id
                 if title == f"Veille Tech - {today_str}":
                     existing_today_page_id = page_id
                     clear_notion_page_blocks(page_id, headers)
@@ -234,9 +249,9 @@ def manage_notion_pages(today_str, yesterday_str):
                         blocks = b_resp.json().get("results", [])
                         lines = []
                         for b in blocks[:20]:
-                            b_type = b.get("type")
-                            if b_type and b_type in b:
-                                text_items = b[b_type].get("rich_text", [])
+                            b_t = b.get("type")
+                            if b_t and b_t in b:
+                                text_items = b[b_t].get("rich_text", [])
                                 t_str = "".join([t.get("plain_text", "") for t in text_items])
                                 if t_str:
                                     lines.append(t_str)

@@ -75,7 +75,6 @@ RSS_FEEDS = [
     "https://feeds.feedburner.com/TheHackersNews",
     "https://aws.amazon.com/blogs/aws/feed/",
     "https://techcrunch.com/feed/",
-    "https://www.linuxtricks.fr/news/rss.xml",
     "https://www.cert.ssi.gouv.fr/feed/",
     "https://kubernetes.io/feed.xml",
     "https://huggingface.co/blog/feed.xml",

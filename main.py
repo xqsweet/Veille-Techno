@@ -59,7 +59,7 @@ def check_french_time():
     return True
 
 # ---------------------------------------------------------------------------
-# CONSTANTES & FLUX RSS
+# CONSTANTES & FLUX RSS (26 FLUX OPTIMISÉS)
 # ---------------------------------------------------------------------------
 RSS_FEEDS = [
     "https://www.it-connect.fr/feed/",
@@ -75,9 +75,9 @@ RSS_FEEDS = [
     "https://feeds.feedburner.com/TheHackersNews",
     "https://aws.amazon.com/blogs/aws/feed/",
     "https://techcrunch.com/feed/",
-    "https://www.phoronix.com/phoronix-rss.php",
+    "https://www.linuxtricks.fr/news/rss.xml",  # Remplacement de Phoronix
     "https://www.cert.ssi.gouv.fr/feed/",
-    "https://www.cncf.io/feed/",
+    "https://kubernetes.io/feed.xml",          # Remplacement de CNCF
     "https://huggingface.co/blog/feed.xml",
     "https://github.blog/feed/",
     "https://www.omgubuntu.co.uk/feed",
@@ -190,7 +190,7 @@ def manage_notion_pages(today_str, yesterday_str):
 
     memory_j_minus_1 = ""
 
-    # 1. Tenter d'inspecter en tant que Page Parent
+    # Mode Page Parent
     blocks_url = f"https://api.notion.com/v1/blocks/{parent_id}/children?page_size=100"
     resp = requests.get(blocks_url, headers=headers)
 
@@ -270,7 +270,7 @@ def manage_notion_pages(today_str, yesterday_str):
     return memory_j_minus_1
 
 # ---------------------------------------------------------------------------
-# 5. SYNTHESE GEMINI (JSON STRUCTURE + AUTO-RETRY)
+# 5. SYNTHESE GEMINI
 # ---------------------------------------------------------------------------
 def process_with_gemini(articles, memory_j_minus_1):
     if not articles:
@@ -300,7 +300,7 @@ CONSIGNES STRICTES :
    - "category": L'une des catégories suivantes : "CYBER", "CLOUD", "IA", "SOFTWARE", "HARDWARE".
    - "urgency": Urgence ("CRITIQUE" pour failles majeures/alertes, "ÉVOLUTION" pour maj/annonces produit, "INFO" pour le reste).
    - "summary": Résumé en 2-3 phrases claires en français (utilise du Markdown léger comme **termes clés** si pertinent).
-   - "impact": 1 sentence expliquant pourquoi c'est important techniquement.
+   - "impact": 1 phrase expliquant pourquoi c'est important techniquement.
    - "source_name": Nom du média source.
    - "source_url": URL exacte de l'article.
 4. Génère également entre 5 et 7 hashtags ("tags") représentatifs des thèmes forts du jour (ex: ["#Cyber", "#Kubernetes", "#Apple", "#Python"]).
@@ -341,7 +341,7 @@ Réponds EXCLUSIVEMENT sous forme d'un objet JSON strict respectant la structure
                 raise e
 
 # ---------------------------------------------------------------------------
-# 6. HELPERS RENDU NOTION (RICH TEXT, CHUNKING, RETRIES)
+# 6. HELPERS RENDU NOTION
 # ---------------------------------------------------------------------------
 def parse_markdown_to_rich_text(text):
     rich_text = []
@@ -391,7 +391,7 @@ def execute_notion_request_with_retry(method, url, headers, json_payload, max_re
     raise Exception(f"❌ [NOTION API] Impossible d'exécuter la requête {method} sur {url}")
 
 # ---------------------------------------------------------------------------
-# 7. CREATION PAGE NOTION DYNAMIQUE (PAGE ID & DATABASE ID COMPATIBLE)
+# 7. CREATION PAGE NOTION
 # ---------------------------------------------------------------------------
 def create_notion_journal_page(today_str, gemini_data, failed_feeds):
     notion_token = os.getenv("NOTION_TOKEN") or os.getenv("NOTION_API_TOKEN")
@@ -511,7 +511,6 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds):
     first_chunk = all_blocks[:100]
     remaining_chunks = [all_blocks[i:i + 100] for i in range(100, len(all_blocks), 100)]
 
-    # 1. Tester en mode Page Parent (création de sous-page)
     page_payload = {
         "parent": {"page_id": parent_id},
         "properties": {
@@ -524,7 +523,6 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds):
     try:
         res = execute_notion_request_with_retry("POST", "https://api.notion.com/v1/pages", headers, page_payload, max_retries=1)
     except Exception:
-        # 2. Fallback si c'est une Base de données
         print("🔄 [NOTION] Bascule sur le mode Database Parent...")
         db_payload = {
             "parent": {"database_id": parent_id},
@@ -548,33 +546,32 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds):
     return page_url, reading_time
 
 # ---------------------------------------------------------------------------
-# 8. NOTIFICATION TELEGRAM
+# 8. NOTIFICATION TELEGRAM (FORMAT HTML & LIEN PERSONNALISÉ)
 # ---------------------------------------------------------------------------
 def send_telegram_notification(today_str, page_url, article_count, reading_time, tags, failed_feeds):
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
     if article_count == 0:
-        message = f"ℹ️ Veille du {today_str} : 0 article aujourd'hui."
+        message = f"ℹ️ <b>Veille du {today_str}</b> : 0 article aujourd'hui."
     else:
         tags_str = " ".join(tags) if tags else "#TechWatch"
         message = (
-            f"✅ Veille Tech du {today_str} est disponible !\n\n"
-            f"📊 {article_count} articles analysés | ⏱️ {reading_time} min de lecture\n"
+            f"✅ <b>Veille Tech du {today_str} est disponible !</b>\n\n"
+            f"📊 <b>{article_count}</b> articles analysés | ⏱️ <b>{reading_time} min</b> de lecture\n"
             f"🏷️ {tags_str}\n"
         )
         if failed_feeds:
             message += f"⚠️ {len(failed_feeds)} source(s) indisponible(s)\n"
 
-        message += f"\n🔗 Ouvrir dans Notion :\n{page_url}"
-
-    if len(message) > 4000:
-        message = message[:3990] + "...\n(Message tronqué)"
+        # Bouton/Hyperlien HTML épuré
+        message += f'\n👉 <a href="{page_url}"><b>📖 Ouvrir le Journal dans Notion</b></a>'
 
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
         "chat_id": chat_id,
         "text": message,
+        "parse_mode": "HTML",
         "disable_web_page_preview": False
     }
 

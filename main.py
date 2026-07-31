@@ -58,29 +58,33 @@ def check_french_time():
 # 3. LISTE DES FLUX RSS & INGESTION ASYNCHRONE FAIL-SAFE
 # ---------------------------------------------------------------------------
 RSS_FEEDS = [
+    # --- Flux Francophones (Conservés & Ajoutés) ---
     "https://www.lemondeinformatique.fr/flux-rss/thematique/toutes-les-actualites/rss.xml",
-    "https://www.usine-digitale.fr/rss",
-    "https://www.zdnet.fr/feeds/rss/actualites/",
     "https://www.01net.com/actualites/feed/",
     "https://www.frandroid.com/feed",
     "https://www.presse-citron.net/feed/",
     "https://www.macg.co/rss",
     "https://korben.info/feed",
     "https://linuxfr.org/news.atom",
-    "https://lecourrierduhacker.com/rss.xml",
     "https://www.cert.ssi.gouv.fr/feed/",
-    "https://www.ssi.gouv.fr/feed/actualite/",
-    "https://m-securite.com/feed/",
-    "https://www.futura-sciences.com/rss/tech/actualites.xml",
+    "https://www.futura-sciences.com/rss/actualites.xml",
     "https://www.silicon.fr/feed",
-    "https://www.clubic.com/feed/news.xml",
     "https://www.developpez.com/index/rss",
     "https://www.it-connect.fr/feed/",
+    "https://www.clubic.com/feed/news.rss",
+    # --- Flux Internationaux (Cyber, Dev, Cloud & IA) ---
+    "https://www.bleepingcomputer.com/feed/",
+    "https://feeds.feedburner.com/TheHackersNews",
+    "https://hnrss.org/frontpage?points=100",
+    "https://dev.to/feed",
+    "https://thenewstack.io/blog/feed/",
+    "https://feed.infoq.com/",
+    "https://github.blog/feed/",
 ]
 
 async def fetch_feed(session, url):
     try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as response:
             if response.status == 200:
                 content = await response.text()
                 parsed = feedparser.parse(content)
@@ -95,7 +99,11 @@ async def collect_rss_articles_async():
     articles = []
     failed_feeds = []
     
-    async with aiohttp.ClientSession() as session:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    }
+    
+    async with aiohttp.ClientSession(headers=headers) as session:
         tasks = [fetch_feed(session, url) for url in RSS_FEEDS]
         results = await asyncio.gather(*tasks)
         

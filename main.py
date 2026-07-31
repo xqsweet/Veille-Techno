@@ -143,29 +143,42 @@ def get_notion_headers():
 def manage_notion_pages(today_str, yesterday_str):
     """
     Gère la déduplication de la page Notion du jour et récupère la mémoire J-1.
+    Compatible avec une Page Notion parente (page_id) ou une Base de Données (database_id).
     """
-    database_id = os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PAGE_ID")
+    target_id = os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PAGE_ID")
     headers = get_notion_headers()
-    url = f"https://api.notion.com/v1/databases/{database_id}/query"
     
     memory_j_minus_1 = ""
     existing_today_page_id = None
     
     try:
-        response = requests.post(url, headers=headers, json={"page_size": 10})
+        # Essai 1: Si c'est une database
+        url_db = f"https://api.notion.com/v1/databases/{target_id}/query"
+        response = requests.post(url_db, headers=headers, json={"page_size": 10})
+        
+        # Essai 2: Si c'est une page parente, lister les enfants via /blocks/{id}/children
+        if response.status_code != 200:
+            url_blocks = f"https://api.notion.com/v1/blocks/{target_id}/children"
+            response = requests.get(url_blocks, headers=headers)
+            
         if response.status_code == 200:
             results = response.json().get("results", [])
             for page in results:
-                title_objs = page.get("properties", {}).get("Name", {}).get("title", [])
-                if not title_objs:
-                    title_objs = page.get("properties", {}).get("Titre", {}).get("title", [])
+                title_text = ""
+                # Si objet page Notion
+                if page.get("object") == "page":
+                    props = page.get("properties", {})
+                    title_objs = props.get("title", {}).get("title", []) or props.get("Name", {}).get("title", []) or props.get("Titre", {}).get("title", [])
+                    title_text = "".join([t.get("plain_text", "") for t in title_objs])
+                # Si bloc child_page
+                elif page.get("type") == "child_page":
+                    title_text = page.get("child_page", {}).get("title", "")
                 
-                title_text = "".join([t.get("plain_text", "") for t in title_objs])
+                page_id = page.get("id")
                 
-                if f"Veille Tech - {today_str}" in title_text:
-                    existing_today_page_id = page.get("id")
-                elif f"Veille Tech - {yesterday_str}" in title_text:
-                    page_id = page.get("id")
+                if f"Veille Tech - {today_str}" in title_text or f"Veille Tech du {today_str}" in title_text:
+                    existing_today_page_id = page_id
+                elif f"Veille Tech - {yesterday_str}" in title_text or f"Veille Tech du {yesterday_str}" in title_text:
                     blocks_url = f"https://api.notion.com/v1/blocks/{page_id}/children"
                     b_resp = requests.get(blocks_url, headers=headers)
                     if b_resp.status_code == 200:
@@ -186,13 +199,17 @@ def get_weekly_notion_history():
     """
     Scrape l'historique des pages Notion des 7 derniers jours pour extraire les failles 🔴.
     """
-    database_id = os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PAGE_ID")
+    target_id = os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PAGE_ID")
     headers = get_notion_headers()
-    url = f"https://api.notion.com/v1/databases/{database_id}/query"
     
     weekly_texts = []
     try:
-        response = requests.post(url, headers=headers, json={"page_size": 15})
+        url_db = f"https://api.notion.com/v1/databases/{target_id}/query"
+        response = requests.post(url_db, headers=headers, json={"page_size": 15})
+        if response.status_code != 200:
+            url_blocks = f"https://api.notion.com/v1/blocks/{target_id}/children"
+            response = requests.get(url_blocks, headers=headers)
+            
         if response.status_code == 200:
             results = response.json().get("results", [])
             for page in results[:7]:
@@ -351,7 +368,7 @@ Renvoie UNIQUEMENT un objet JSON valide structuré comme suit :
 # ---------------------------------------------------------------------------
 def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_page_id=None, weekly_top_data=None):
     print("📝 [NOTION] Création / Remplacement de la page Journal Notion...")
-    database_id = os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PAGE_ID")
+    target_id = os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PAGE_ID")
     headers = get_notion_headers()
     
     if existing_page_id:
@@ -378,7 +395,7 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_pa
             }
         })
 
-    # BLOC CALLOUT TOP FAILLES DE LA SEMAINE (UNIZUEMENT LE DIMANCHE)
+    # BLOC CALLOUT TOP FAILLES DE LA SEMAINE (UNIQUEMENT LE DIMANCHE)
     if weekly_top_data and weekly_top_data.get("top_failles"):
         top_list = weekly_top_data.get("top_failles", [])
         count = weekly_top_data.get("count", len(top_list))
@@ -472,19 +489,34 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_pa
             }
         })
 
-    # CRÉATION DE LA PAGE DANS NOTION
+    # CRÉATION DE LA PAGE DANS NOTION (Tentative Page parent, puis Database parent)
     create_url = "https://api.notion.com/v1/pages"
-    payload = {
-        "parent": {"database_id": database_id},
+    
+    # 1. Tentative sous forme de sous-page (page_id)
+    payload_page = {
+        "parent": {"page_id": target_id},
         "properties": {
-            "Name": {
-                "title": [{"type": "text", "text": {"content": page_title}}]
-            }
+            "title": [{"type": "text", "text": {"content": page_title}}]
         },
         "children": blocks[:100]
     }
     
-    res = requests.post(create_url, headers=headers, json=payload)
+    res = requests.post(create_url, headers=headers, json=payload_page)
+    
+    # 2. Si échec (ex: target_id est une Database), tentative sous forme d'élément de Database
+    if res.status_code != 200:
+        print("⚠️ [NOTION] Tentative sous format database_id...")
+        payload_db = {
+            "parent": {"database_id": target_id},
+            "properties": {
+                "Name": {
+                    "title": [{"type": "text", "text": {"content": page_title}}]
+                }
+            },
+            "children": blocks[:100]
+        }
+        res = requests.post(create_url, headers=headers, json=payload_db)
+        
     if res.status_code == 200:
         page_data = res.json()
         page_id_raw = page_data.get("id", "").replace("-", "")
@@ -496,8 +528,10 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_pa
         print(f"✅ [NOTION] Page créée avec succès : {page_url}")
         return page_url, reading_time
     else:
-        print(f"❌ [NOTION ERROR] Statut HTTP {res.status_code} : {res.text}")
-        return "https://notion.so", 1
+        print(f"❌ [NOTION ERROR] Échec de la création de la page. Statut HTTP {res.status_code} : {res.text}")
+        total_words = sum([len(a.get("summary", "").split()) for c in categories.values() for a in c])
+        reading_time = max(1, math.ceil(total_words / 200))
+        return f"https://notion.so/{target_id.replace('-', '')}", reading_time
 
 # ---------------------------------------------------------------------------
 # 7. TELEGRAM PUSH NOTIFICATION

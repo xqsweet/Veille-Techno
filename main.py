@@ -469,7 +469,7 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_pa
             "icon": {"emoji": "📌"},
             "color": "gray_background",
             "rich_text": [
-                {"type": "text", "text": {"content": f"Temps de lecture estimé : {reading_time} min\n"}},
+                {"type": "text", "text": {"content": f"⏱️ Temps de lecture estimé : {reading_time} min\n"}},
                 {"type": "text", "text": {"content": "🏷️ Mots-clés du jour : #Cybersecurity #ZeroDay #AI #CloudNative #Hardware #DevOps"}}
             ]
         }

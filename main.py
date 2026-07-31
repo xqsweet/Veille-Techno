@@ -670,7 +670,7 @@ def main():
     yesterday_str = (paris_time - datetime.timedelta(days=1)).strftime("%d/%m/%Y")
 
     # Détection du jour (6 = Dimanche)
-    is_sunday = (paris_time.weekday() == 6)
+    is_sunday = True
     weekly_top_data = None
     
     if is_sunday:

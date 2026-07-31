@@ -629,7 +629,7 @@ def send_telegram_notification(today_str, articles_count, reading_time, page_url
         msg += "🚨 *FAILLES CRITIQUES DE LA SEMAINE*\n"
         msg += weekly_top_data.get("telegram_summary") + "\n\n"
         
-    msg += f"🔗 [Consulter le journal complet sur Notion]({page_url})"
+    msg += f"🔗 [Consulter le journal sur Notion]({page_url})"
     
     payload = {
         "chat_id": chat_id,

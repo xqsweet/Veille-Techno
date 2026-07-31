@@ -680,6 +680,18 @@ def main():
             weekly_top_data = process_weekly_top_with_gemini(weekly_history_text)
 
     memory_j_minus_1, existing_today_page_id = manage_notion_pages(today_str, yesterday_str)
+
+    event_name = os.getenv("GITHUB_EVENT_NAME", "")
+    is_manual = (event_name == "workflow_dispatch" or not event_name)
+
+    if existing_today_page_id:
+        if not is_manual:
+            print(f"ℹ️ [IDEMPOTENCE] La page Notion 'Veille Tech - {today_str}' (ou du {today_str}) existe déjà ({existing_today_page_id}).")
+            print("✅ Exécution automatique (cron) arrêtée proprement pour éviter les doublons.")
+            sys.exit(0)
+        else:
+            print("⚡ [MANUAL OVERRIDE] Relance manuelle / test détectée. L'ancienne page du jour sera archivée et remplacée.")
+
     raw_articles, failed_feeds = asyncio.run(collect_rss_articles_async())
     gemini_data = process_with_gemini(raw_articles, memory_j_minus_1)
 
@@ -687,7 +699,7 @@ def main():
         today_str, 
         gemini_data, 
         failed_feeds, 
-        existing_page_id=existing_today_page_id,
+        existing_page_id=(existing_today_page_id if is_manual else None),
         weekly_top_data=weekly_top_data
     )
 

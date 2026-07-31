@@ -54,16 +54,19 @@ def check_french_time():
     paris_time = now_utc.astimezone(ZoneInfo("Europe/Paris"))
     print(f"🕒 [TIME CHECK] Heure actuelle à Paris : {paris_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 # ---------------------------------------------------------------------------
 # 3. LISTE DES FLUX RSS & INGESTION ASYNCHRONE FAIL-SAFE
 # ---------------------------------------------------------------------------
 RSS_FEEDS = [
-    # --- Flux Francophones (Conservés & Ajoutés) ---
+    # --- Flux Francophones (Conservés & Optimisés) ---
     "https://www.lemondeinformatique.fr/flux-rss/thematique/toutes-les-actualites/rss.xml",
     "https://www.01net.com/actualites/feed/",
     "https://www.frandroid.com/feed",
     "https://www.presse-citron.net/feed/",
-    "https://www.macg.co/rss",
+    "https://www.iphon.fr/feed",
     "https://korben.info/feed",
     "https://linuxfr.org/news.atom",
     "https://www.cert.ssi.gouv.fr/feed/",
@@ -82,29 +85,56 @@ RSS_FEEDS = [
     "https://github.blog/feed/",
 ]
 
-async def fetch_feed(session, url):
+def sync_fallback_fetch(url, headers):
+    """
+    Fallback synchrone via requests en cas d'échec d'aiohttp.
+    Exécuté hors du thread principal via asyncio.to_thread.
+    """
     try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as response:
+        r = requests.get(url, headers=headers, timeout=12, verify=False)
+        if r.status_code == 200:
+            parsed = feedparser.parse(r.content)
+            if parsed.entries:
+                return parsed.entries, None
+        return [], f"HTTP {r.status_code}"
+    except Exception as e:
+        return [], f"Exception ({type(e).__name__})"
+
+async def fetch_feed(session, url, headers):
+    """
+    Tente la récupération asynchrone via aiohttp, puis bascule sur requests en fallback.
+    """
+    # 1. Tentative asynchrone (aiohttp)
+    try:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=12), ssl=False) as response:
             if response.status == 200:
-                content = await response.text()
+                content = await response.read()
                 parsed = feedparser.parse(content)
-                if not parsed.bozo or parsed.entries:
+                if parsed.entries:
                     return parsed.entries, None
-            return [], url
     except Exception:
-        return [], url
+        pass
+
+    # 2. Fallback synchrone non-bloquant en thread séparé
+    entries, err_desc = await asyncio.to_thread(sync_fallback_fetch, url, headers)
+    if entries:
+        return entries, None
+    
+    print(f"❌ [RSS FAIL] {url} -> {err_desc}")
+    return [], url
 
 async def collect_rss_articles_async():
-    print("📡 [RSS] Ingestion asynchrone des flux RSS...")
+    print("📡 [RSS] Ingestion asynchrone des flux RSS (mode fail-safe high-reliability)...")
     articles = []
     failed_feeds = []
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        "User-Agent": "feedparser/6.0.14 (Mozilla/5.0; +https://github.com)"
     }
     
-    async with aiohttp.ClientSession(headers=headers) as session:
-        tasks = [fetch_feed(session, url) for url in RSS_FEEDS]
+    connector = aiohttp.TCPConnector(ssl=False)
+    async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
+        tasks = [fetch_feed(session, url, headers) for url in RSS_FEEDS]
         results = await asyncio.gather(*tasks)
         
         now_utc = datetime.datetime.now(datetime.timezone.utc)

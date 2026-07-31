@@ -366,6 +366,29 @@ Renvoie UNIQUEMENT un objet JSON valide structuré comme suit :
 # ---------------------------------------------------------------------------
 # 6. CRÉATION & FORMATAGE DE LA PAGE NOTION
 # ---------------------------------------------------------------------------
+def parse_markdown_to_rich_text(text):
+    """
+    Transforme du texte contenant du Markdown **gras** en liste de rich_text pour Notion.
+    """
+    parts = re.split(r"(\*\*.*?\*\*)", text)
+    rich_text = []
+    for part in parts:
+        if part.startswith("**") and part.endswith("**"):
+            clean_content = part[2:-2]
+            if clean_content:
+                rich_text.append({
+                    "type": "text",
+                    "text": {"content": clean_content},
+                    "annotations": {"bold": True}
+                })
+        else:
+            if part:
+                rich_text.append({
+                    "type": "text",
+                    "text": {"content": part}
+                })
+    return rich_text
+
 def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_page_id=None, weekly_top_data=None):
     print("📝 [NOTION] Création / Remplacement de la page Journal Notion...")
     target_id = os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PAGE_ID")
@@ -379,7 +402,7 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_pa
     page_title = f"Veille Tech - {today_str}"
     blocks = []
     
-    # BLOC APPEL EN TÊTE - FLUX RSS INDISPONIBLES
+    # 1. BLOC APPEL EN TÊTE - FLUX RSS INDISPONIBLES (CONSERVÉ STRICTEMENT)
     if failed_feeds:
         failed_list = ", ".join([f.split('/')[2] for f in failed_feeds if '/' in f])
         blocks.append({
@@ -395,7 +418,26 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_pa
             }
         })
 
-    # BLOC CALLOUT TOP FAILLES DE LA SEMAINE (UNIQUEMENT LE DIMANCHE)
+    # Calcul du temps de lecture global
+    categories = gemini_data.get("categories", {})
+    total_words = sum([len(a.get("summary", "").split()) for c in categories.values() for a in c])
+    reading_time = max(1, math.ceil(total_words / 200))
+
+    # 2. BLOC CALLOUT EN-TÊTE - METADONNÉES (TEMPS DE LECTURE & MOTS-CLÉS)
+    blocks.append({
+        "object": "block",
+        "type": "callout",
+        "callout": {
+            "icon": {"emoji": "📌"},
+            "color": "gray_background",
+            "rich_text": [
+                {"type": "text", "text": {"content": f"Temps de lecture estimé : {reading_time} min\n"}},
+                {"type": "text", "text": {"content": "🏷️ Mots-clés du jour : #Cybersecurity #ZeroDay #AI #CloudNative #Hardware #DevOps"}}
+            ]
+        }
+    })
+
+    # 3. BLOC CALLOUT TOP FAILLES DE LA SEMAINE (UNIQUEMENT LE DIMANCHE)
     if weekly_top_data and weekly_top_data.get("top_failles"):
         top_list = weekly_top_data.get("top_failles", [])
         count = weekly_top_data.get("count", len(top_list))
@@ -418,7 +460,7 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_pa
             }
         })
         
-    # SECTION EN BREF
+    # 4. SECTION EN BREF (AVEC PARSING DU MARROWDOWN **GRAS**)
     en_bref_items = gemini_data.get("en_bref", [])
     if en_bref_items:
         blocks.append({
@@ -433,12 +475,12 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_pa
                 "object": "block",
                 "type": "bulleted_list_item",
                 "bulleted_list_item": {
-                    "rich_text": [{"type": "text", "text": {"content": item}}]
+                    "rich_text": parse_markdown_to_rich_text(item)
                 }
             })
 
-    # SECTION CATEGORIES / TOGGLES
-    categories = gemini_data.get("categories", {})
+    # 5. SECTION CATEGORIES / TOGGLES (NUMÉROTÉES ET EN GRAS)
+    cat_idx = 1
     for cat_name, articles in categories.items():
         if not articles:
             continue
@@ -484,15 +526,19 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_pa
             "object": "block",
             "type": "toggle",
             "toggle": {
-                "rich_text": [{"type": "text", "text": {"content": f"{cat_name} ({len(articles)})"}}],
+                "rich_text": [{
+                    "type": "text",
+                    "text": {"content": f"{cat_idx}. {cat_name}"},
+                    "annotations": {"bold": True}
+                }],
                 "children": toggle_children
             }
         })
+        cat_idx += 1
 
-    # CRÉATION DE LA PAGE DANS NOTION (Tentative Page parent, puis Database parent)
+    # CRÉATION DE LA PAGE DANS NOTION (Page parent, puis Database parent si échec)
     create_url = "https://api.notion.com/v1/pages"
     
-    # 1. Tentative sous forme de sous-page (page_id)
     payload_page = {
         "parent": {"page_id": target_id},
         "properties": {
@@ -503,7 +549,6 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_pa
     
     res = requests.post(create_url, headers=headers, json=payload_page)
     
-    # 2. Si échec (ex: target_id est une Database), tentative sous forme d'élément de Database
     if res.status_code != 200:
         print("⚠️ [NOTION] Tentative sous format database_id...")
         payload_db = {
@@ -522,15 +567,10 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_pa
         page_id_raw = page_data.get("id", "").replace("-", "")
         page_url = f"https://notion.so/{page_id_raw}"
         
-        total_words = sum([len(a.get("summary", "").split()) for c in categories.values() for a in c])
-        reading_time = max(1, math.ceil(total_words / 200))
-        
         print(f"✅ [NOTION] Page créée avec succès : {page_url}")
         return page_url, reading_time
     else:
         print(f"❌ [NOTION ERROR] Échec de la création de la page. Statut HTTP {res.status_code} : {res.text}")
-        total_words = sum([len(a.get("summary", "").split()) for c in categories.values() for a in c])
-        reading_time = max(1, math.ceil(total_words / 200))
         return f"https://notion.so/{target_id.replace('-', '')}", reading_time
 
 # ---------------------------------------------------------------------------

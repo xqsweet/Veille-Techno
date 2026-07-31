@@ -37,627 +37,508 @@ def preflight_check():
     print("✅ [PRE-FLIGHT] Toutes les variables d'environnement sont présentes.")
 
 # ---------------------------------------------------------------------------
-# 2. FRENCH TIME CHECK (GUARDRAIL DOUBLE CRON)
+# 2. HORAIRE ET DÉCLENCHEMENT (VERIFICATION HEURE FRANÇAISE / CRON-JOB)
 # ---------------------------------------------------------------------------
 def check_french_time():
     """
-    Garantit l'exécution à 18h15 heure française.
-    Si le script est relancé manuellement via workflow_dispatch, la règle est outrepassée.
+    Vérifie le déclenchement. Si workflow_dispatch ou manual, ignore.
+    Sinon s'assure de l'exécution à l'heure FR.
     """
     event_name = os.getenv("GITHUB_EVENT_NAME", "")
     if event_name == "workflow_dispatch":
-        print("⚡ [EXECUTION] Déclenchement manuel via workflow_dispatch : outrepasser le filtre horaire.")
-        return True
+        print("⚡ [TRIGGER] Déclenchement manuel / API (cron-job.org) détecté. Exécution immédiate.")
+        return
 
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     paris_time = now_utc.astimezone(ZoneInfo("Europe/Paris"))
-    print(f"🕒 [HEURE LOCAL] Heure actuelle à Paris : {paris_time.strftime('%H:%M:%S (%Z)')}")
-
-    if paris_time.hour != 18:
-        print(f"🛑 [HEURE GUARD] Il est {paris_time.hour}h à Paris (18h attendu). Arrêt propre.")
-        sys.exit(0)
-    return True
+    print(f"🕒 [TIME CHECK] Heure actuelle à Paris : {paris_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
 # ---------------------------------------------------------------------------
-# CONSTANTES & FLUX RSS (26 FLUX OPTIMISÉS)
+# 3. LISTE DES FLUX RSS & INGESTION ASYNCHRONE FAIL-SAFE
 # ---------------------------------------------------------------------------
 RSS_FEEDS = [
-    "https://www.it-connect.fr/feed/",
-    "https://www.lemondeinformatique.fr/flux-rss/rss.xml",
-    "https://www.numerama.com/tech/feed/",
-    "https://www.clubic.com/feed/news.rss",
-    "https://www.zataz.com/feed/",
-    "https://www.lesnumeriques.com/rss.xml",
-    "https://www.usine-digitale.fr/rss/",
-    "https://www.developpez.com/index/rss",
-    "https://www.bleepingcomputer.com/feed/",
-    "https://feeds.feedburner.com/ArsTechnica",
-    "https://feeds.feedburner.com/TheHackersNews",
-    "https://aws.amazon.com/blogs/aws/feed/",
-    "https://techcrunch.com/feed/",
-    "https://www.cert.ssi.gouv.fr/feed/",
-    "https://kubernetes.io/feed.xml",
-    "https://huggingface.co/blog/feed.xml",
-    "https://github.blog/feed/",
-    "https://www.omgubuntu.co.uk/feed",
-    "https://www.frandroid.com/feed",
-    "https://korben.info/feed",
-    "https://www.presse-citron.net/feed/",
-    "https://siecledigital.fr/feed/",
+    "https://www.lemondeinformatique.fr/flux-rss/thematique/toutes-les-actualites/rss.xml",
+    "https://www.usine-digitale.fr/rss",
+    "https://www.zdnet.fr/feeds/rss/actualites/",
     "https://www.01net.com/actualites/feed/",
+    "https://www.frandroid.com/feed",
+    "https://www.presse-citron.net/feed/",
     "https://www.macg.co/rss",
+    "https://korben.info/feed",
     "https://linuxfr.org/news.atom",
+    "https://lecourrierduhacker.com/rss.xml",
+    "https://www.cert.ssi.gouv.fr/feed/",
+    "https://www.ssi.gouv.fr/feed/actualite/",
+    "https://m-securite.com/feed/",
+    "https://www.futura-sciences.com/rss/tech/actualites.xml",
+    "https://www.silicon.fr/feed",
+    "https://www.clubic.com/feed/news.xml",
+    "https://www.developpez.com/index/rss",
+    "https://www.it-connect.fr/feed/",
 ]
 
-CATEGORIES_MAP = {
-    "CYBER": "1. 🛡️ Cybersécurité & Vulnérabilités",
-    "CYBERSECURITE": "1. 🛡️ Cybersécurité & Vulnérabilités",
-    "SECURITY": "1. 🛡️ Cybersécurité & Vulnérabilités",
-    "CLOUD": "2. ☁️ Cloud, DevOps & Infrastructure",
-    "DEVOPS": "2. ☁️ Cloud, DevOps & Infrastructure",
-    "INFRASTRUCTURE": "2. ☁️ Cloud, DevOps & Infrastructure",
-    "IA": "3. 🤖 Intelligence Artificielle & Data",
-    "AI": "3. 🤖 Intelligence Artificielle & Data",
-    "DATA": "3. 🤖 Intelligence Artificielle & Data",
-    "SOFTWARE": "4. 💻 Système, Software & Open-Source",
-    "SYSTEME": "4. 💻 Système, Software & Open-Source",
-    "OS": "4. 💻 Système, Software & Open-Source",
-    "OPEN-SOURCE": "4. 💻 Système, Software & Open-Source",
-    "HARDWARE": "5. 📱 Hardware & Innovations Tech",
-    "CONSUMER": "5. 📱 Hardware & Innovations Tech",
-    "INNOVATION": "5. 📱 Hardware & Innovations Tech",
-    "MOBILE": "5. 📱 Hardware & Innovations Tech",
-}
-
-DEFAULT_CATEGORY = "🌐 Divers & Tech Générale"
-
-# ---------------------------------------------------------------------------
-# 3. COLLECTE RSS ASYNCHRONE (aiohttp)
-# ---------------------------------------------------------------------------
-async def fetch_feed(session, url, headers):
+async def fetch_feed(session, url):
     try:
-        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=6)) as response:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
             if response.status == 200:
-                content = await response.read()
-                return url, content, None
-            else:
-                return url, None, f"HTTP {response.status}"
-    except Exception as e:
-        return url, None, str(e)
+                content = await response.text()
+                parsed = feedparser.parse(content)
+                if not parsed.bozo or parsed.entries:
+                    return parsed.entries, None
+            return [], url
+    except Exception:
+        return [], url
 
 async def collect_rss_articles_async():
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    print("📡 [RSS] Ingestion asynchrone des flux RSS...")
     articles = []
     failed_feeds = []
-
-    now_utc = datetime.datetime.now(datetime.timezone.utc)
-    cutoff_time = now_utc - datetime.timedelta(hours=24)
-
+    
     async with aiohttp.ClientSession() as session:
-        tasks = [fetch_feed(session, url, headers) for url in RSS_FEEDS]
+        tasks = [fetch_feed(session, url) for url in RSS_FEEDS]
         results = await asyncio.gather(*tasks)
-
-    for url, content, error in results:
-        domain = url.split("/")[2].replace("www.", "")
-        if error or not content:
-            failed_feeds.append(domain)
-            print(f"⚠️ [RSS KO] {url} -> {error}")
-            continue
-
-        try:
-            feed = feedparser.parse(content)
-            source_name = feed.feed.get("title", domain)
-
-            for entry in feed.entries:
-                pub_date = None
-                if hasattr(entry, "published_parsed") and entry.published_parsed:
-                    pub_date = datetime.datetime(*entry.published_parsed[:6], tzinfo=datetime.timezone.utc)
-                elif hasattr(entry, "updated_parsed") and entry.updated_parsed:
-                    pub_date = datetime.datetime(*entry.updated_parsed[:6], tzinfo=datetime.timezone.utc)
-
-                if pub_date is None or pub_date >= cutoff_time:
-                    title = entry.get("title", "Sans titre")
-                    link = entry.get("link", url)
-                    summary = entry.get("summary", entry.get("description", ""))
-                    clean_summary = re.sub(r"<[^<]+?>", "", summary)[:300]
-
+        
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        cutoff_time = now_utc - datetime.timedelta(hours=36)
+        
+        for entries, failed_url in results:
+            if failed_url:
+                failed_feeds.append(failed_url)
+                continue
+            
+            for entry in entries:
+                title = entry.get("title", "").strip()
+                link = entry.get("link", "").strip()
+                summary = entry.get("summary", entry.get("description", "")).strip()
+                summary_clean = re.sub("<.*?>", "", summary)
+                
+                published_parsed = entry.get("published_parsed") or entry.get("updated_parsed")
+                if published_parsed:
+                    pub_dt = datetime.datetime(*published_parsed[:6], tzinfo=datetime.timezone.utc)
+                    if pub_dt < cutoff_time:
+                        continue
+                
+                if title and link:
                     articles.append({
-                        "source": source_name,
                         "title": title,
                         "link": link,
-                        "summary": clean_summary,
-                        "pub_date": pub_date.strftime("%Y-%m-%d %H:%M") if pub_date else "Aujourd'hui"
+                        "summary": summary_clean[:300]
                     })
-        except Exception as parse_err:
-            failed_feeds.append(domain)
-            print(f"⚠️ [RSS PARSE ERROR] {url} -> {parse_err}")
-
-    print(f"📡 [RSS] {len(articles)} articles récents collectés sur {len(RSS_FEEDS) - len(failed_feeds)}/{len(RSS_FEEDS)} flux.")
+                    
+    print(f"✅ [RSS] {len(articles)} articles récents collectés. ({len(failed_feeds)} flux indisponibles)")
     return articles, failed_feeds
 
 # ---------------------------------------------------------------------------
-# 4. MEMOIRE NOTION J-1 & NETTOYAGE AUTO J
+# 4. GESTION DES PAGES NOTION & HISTORIQUE HEBDOMADAIRE
 # ---------------------------------------------------------------------------
-def clear_notion_page_blocks(page_id, headers):
-    """Vide l'intégralité des blocs contenus dans une page Notion."""
-    has_more = True
-    next_cursor = None
-    while has_more:
-        url = f"https://api.notion.com/v1/blocks/{page_id}/children?page_size=100"
-        if next_cursor:
-            url += f"&start_cursor={next_cursor}"
-        res = requests.get(url, headers=headers)
-        if res.status_code == 200:
-            data = res.json()
-            blocks = data.get("results", [])
-            has_more = data.get("has_more", False)
-            next_cursor = data.get("next_cursor")
-            for block in blocks:
-                b_id = block["id"]
-                try:
-                    requests.delete(f"https://api.notion.com/v1/blocks/{b_id}", headers=headers)
-                except Exception as e:
-                    print(f"⚠️ [NOTION CLEAR BLOCK ERROR] {b_id} : {e}")
-        else:
-            break
-    print(f"🧹 [NOTION] Blocs de la page {page_id} nettoyés.")
+def get_notion_headers():
+    token = os.getenv("NOTION_TOKEN") or os.getenv("NOTION_API_TOKEN")
+    return {
+        "Authorization": f"Bearer {token}",
+        "Notion-Version": "2022-06-28",
+        "Content-Type": "application/json"
+    }
 
 def manage_notion_pages(today_str, yesterday_str):
-    notion_token = os.getenv("NOTION_TOKEN") or os.getenv("NOTION_API_TOKEN")
-    parent_id = os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PAGE_ID")
-    headers = {
-        "Authorization": f"Bearer {notion_token}",
-        "Notion-Version": "2022-06-28",
-        "Content-Type": "application/json"
-    }
-
+    """
+    Gère la déduplication de la page Notion du jour et récupère la mémoire J-1.
+    """
+    database_id = os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PAGE_ID")
+    headers = get_notion_headers()
+    url = f"https://api.notion.com/v1/databases/{database_id}/query"
+    
     memory_j_minus_1 = ""
     existing_today_page_id = None
-
-    # Mode Page Parent
-    blocks_url = f"https://api.notion.com/v1/blocks/{parent_id}/children?page_size=100"
-    resp = requests.get(blocks_url, headers=headers)
-
-    if resp.status_code == 200:
-        results = resp.json().get("results", [])
-        for block in results:
-            b_type = block.get("type")
-            b_id = block["id"]
-
-            # Nettoyage des blocs de paragraphes vides parasites dans la page parent
-            if b_type == "paragraph":
-                rich_text = block.get("paragraph", {}).get("rich_text", [])
-                plain_text = "".join([t.get("plain_text", "") for t in rich_text]).strip()
-                if not plain_text:
-                    try:
-                        requests.delete(f"https://api.notion.com/v1/blocks/{b_id}", headers=headers)
-                        print(f"🧹 [NOTION] Bloc paragraphe vide parasite ({b_id}) supprimé de la page parent.")
-                    except Exception as e:
-                        print(f"⚠️ [NOTION DELETE ERROR] {b_id} : {e}")
-                    continue
-
-            if b_type == "child_page":
-                title = block.get("child_page", {}).get("title", "")
-                page_id = b_id
-                if title == f"Veille Tech - {today_str}":
-                    existing_today_page_id = page_id
-                    clear_notion_page_blocks(page_id, headers)
-                    print(f"♻️ [NOTION] Ancienne page du jour ({today_str}) conservée et réinitialisée.")
-                elif title == f"Veille Tech - {yesterday_str}":
-                    b_resp = requests.get(f"https://api.notion.com/v1/blocks/{page_id}/children", headers=headers)
+    
+    try:
+        response = requests.post(url, headers=headers, json={"page_size": 10})
+        if response.status_code == 200:
+            results = response.json().get("results", [])
+            for page in results:
+                title_objs = page.get("properties", {}).get("Name", {}).get("title", [])
+                if not title_objs:
+                    title_objs = page.get("properties", {}).get("Titre", {}).get("title", [])
+                
+                title_text = "".join([t.get("plain_text", "") for t in title_objs])
+                
+                if f"Veille Tech - {today_str}" in title_text:
+                    existing_today_page_id = page.get("id")
+                elif f"Veille Tech - {yesterday_str}" in title_text:
+                    page_id = page.get("id")
+                    blocks_url = f"https://api.notion.com/v1/blocks/{page_id}/children"
+                    b_resp = requests.get(blocks_url, headers=headers)
                     if b_resp.status_code == 200:
-                        blocks = b_resp.json().get("results", [])
-                        lines = []
-                        for b in blocks[:20]:
-                            b_t = b.get("type")
-                            if b_t and b_t in b:
-                                text_items = b[b_t].get("rich_text", [])
-                                t_str = "".join([t.get("plain_text", "") for t in text_items])
-                                if t_str:
-                                    lines.append(t_str)
-                        memory_j_minus_1 = "\n".join(lines)[:1500]
-                        print(f"🧠 [NOTION] Mémoire J-1 chargée depuis Notion ({len(memory_j_minus_1)} caractères).")
-    else:
-        # Fallback : Mode Database Query
-        query_url = f"https://api.notion.com/v1/databases/{parent_id}/query"
-        payload_today = {
-            "filter": {
-                "and": [
-                    {"property": "Name", "title": {"equals": f"Veille Tech - {today_str}"}},
-                    {"archived": False}
-                ]
-            }
-        }
-        resp = requests.post(query_url, headers=headers, json=payload_today)
-        if resp.status_code == 200:
-            for page in resp.json().get("results", []):
-                page_id = page["id"]
-                existing_today_page_id = page_id
-                clear_notion_page_blocks(page_id, headers)
-                print(f"♻️ [NOTION] Ancienne page du jour ({today_str}) conservée et réinitialisée.")
-
-        payload_yesterday = {
-            "filter": {
-                "and": [
-                    {"property": "Name", "title": {"equals": f"Veille Tech - {yesterday_str}"}},
-                    {"archived": False}
-                ]
-            }
-        }
-        resp_y = requests.post(query_url, headers=headers, json=payload_yesterday)
-        if resp_y.status_code == 200:
-            results_y = resp_y.json().get("results", [])
-            if results_y:
-                yesterday_page_id = results_y[0]["id"]
-                blocks_url_y = f"https://api.notion.com/v1/blocks/{yesterday_page_id}/children"
-                b_resp = requests.get(blocks_url_y, headers=headers)
-                if b_resp.status_code == 200:
-                    blocks = b_resp.json().get("results", [])
-                    lines = []
-                    for b in blocks[:20]:
-                        b_type = b.get("type")
-                        if b_type and b_type in b:
-                            text_items = b[b_type].get("rich_text", [])
-                            t_str = "".join([t.get("plain_text", "") for t in text_items])
-                            if t_str:
-                                lines.append(t_str)
-                    memory_j_minus_1 = "\n".join(lines)[:1500]
-                    print(f"🧠 [NOTION] Mémoire J-1 chargée depuis Notion ({len(memory_j_minus_1)} caractères).")
-
-    if not memory_j_minus_1:
-        print("ℹ️ [NOTION] Aucun historique J-1 disponible.")
-
+                        b_results = b_resp.json().get("results", [])
+                        texts = []
+                        for b in b_results:
+                            b_type = b.get("type")
+                            if b_type and b_type in b:
+                                rich_texts = b[b_type].get("rich_text", [])
+                                texts.append("".join([rt.get("plain_text", "") for rt in rich_texts]))
+                        memory_j_minus_1 = "\n".join(texts)[:2000]
+    except Exception as e:
+        print(f"⚠️ [NOTION MEMORY] Erreur lors de la gestion des pages : {e}")
+        
     return memory_j_minus_1, existing_today_page_id
 
-# ---------------------------------------------------------------------------
-# 5. SYNTHESE GEMINI
-# ---------------------------------------------------------------------------
-def process_with_gemini(articles, memory_j_minus_1):
-    if not articles:
-        return {"articles": [], "tags": []}
+def get_weekly_notion_history():
+    """
+    Scrape l'historique des pages Notion des 7 derniers jours pour extraire les failles 🔴.
+    """
+    database_id = os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PAGE_ID")
+    headers = get_notion_headers()
+    url = f"https://api.notion.com/v1/databases/{database_id}/query"
+    
+    weekly_texts = []
+    try:
+        response = requests.post(url, headers=headers, json={"page_size": 15})
+        if response.status_code == 200:
+            results = response.json().get("results", [])
+            for page in results[:7]:
+                page_id = page.get("id")
+                blocks_url = f"https://api.notion.com/v1/blocks/{page_id}/children"
+                b_resp = requests.get(blocks_url, headers=headers)
+                if b_resp.status_code == 200:
+                    b_results = b_resp.json().get("results", [])
+                    for b in b_results:
+                        b_type = b.get("type")
+                        if b_type and b_type in b:
+                            rich_texts = b[b_type].get("rich_text", [])
+                            text = "".join([rt.get("plain_text", "") for rt in rich_texts])
+                            if "🔴" in text or "CRITIQUE" in text.upper() or "CVE" in text.upper():
+                                weekly_texts.append(text)
+    except Exception as e:
+        print(f"⚠️ [NOTION WEEKLY HISTORY] Erreur lors de la récupération : {e}")
+        
+    return "\n".join(weekly_texts[:4000])
 
+# ---------------------------------------------------------------------------
+# 5. MOTEUR IA GEMINI (DAILY SYNTHESIS & WEEKLY TOP)
+# ---------------------------------------------------------------------------
+def process_with_gemini(raw_articles, memory_j_minus_1):
+    print("🧠 [GEMINI] Analyse et synthèse par Gemini 3.5 Flash Lite...")
     genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+    
+    safety_settings = [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    ]
+    
+    model = genai.GenerativeModel("gemini-3.5-flash-lite", safety_settings=safety_settings)
+    
+    prompt = f"""
+Tu es un ingénieur Tech Lead expert en veille technologique et cybersécurité.
+Voici la liste des articles collectés au cours des dernières 24-36h :
+{json.dumps(raw_articles, ensure_ascii=False, indent=2)}
 
-    articles_text = ""
-    for idx, a in enumerate(articles, 1):
-        articles_text += f"[{idx}] Source: {a['source']} | Titre: {a['title']} | Date: {a['pub_date']}\nExtrait: {a['summary']}\nLien: {a['link']}\n\n"
+Voici un résumé de la veille d'hier (Mémoire J-1) à ne PAS répéter :
+{memory_j_minus_1}
 
-    SYSTEM_PROMPT = """
-RÈGLES STRICTES DE CRITICITÉ (🔴 / 🟠 / 🟢) :
-Sois extrêmement SÉVÈRE et SÉLECTIF. Ne colle PAS du rouge partout !
+CONSIGNES DE TRAITEMENT :
+1. Élimine les doublons stricts et les sujets déjà traités dans la mémoire J-1.
+2. Classe les articles retenus dans exactement 5 catégories :
+   - 🛡️ Cybersécurité & Vulnérabilités
+   - 🤖 Intelligence Artificielle & Data
+   - 💻 Développement, DevOps & Cloud
+   - 📱 Consumer Tech, Hardware & OS
+   - 🌐 Écosystème IT, Digital & Innovation
+3. Pour chaque article, attribue un niveau de criticité/urgence :
+   - 🔴 [CRITIQUE] : Faille zéro-day activement exploitée, panne majeure de service cloud/infrastructure mondial, menace immédiate.
+   - 🟠 [ÉVOLUTION] : Publication de correctifs majeurs, mise à jour de version principale (v2.0, etc.), annonce produit importante.
+   - 🟢 [INFO] : Bonnes pratiques, article de fond, tutoriel, annonce mineure.
+4. Tri : À l'intérieur de chaque catégorie, classe impérativement les articles du plus urgent au moins urgent (🔴 puis 🟠 puis 🟢).
+5. Résumé : Fournis un résumé synthétique clair et percutant de 2 à 3 phrases par article avec la référence exacte du lien fourni.
+6. En Bref : Génère un chapeau "🚀 En bref" synthétisant en 3 à 5 puces les faits majeurs absolus de la journée.
 
-🔴 [CRITIQUE] (Max 1 à 2 articles par jour MAXIMUM dans TOUT le journal) :
-- Réservé EXCLUSIVEMENT aux failles Zero-Day activement exploitées dans le monde, aux piratages majeurs d'infrastructures critiques, ou aux pannes mondiales d'acteurs majeurs (AWS, Cloudflare, Microsoft 365).
-- Si une faille nécessite un accès physique ou un scénario improbable, ce N'EST PAS critique.
-
-🟠 [ÉVOLUTION] (Urgence moyenne / Actualité importante) :
-- Patchs de sécurité mensuels (Patch Tuesday, Chrome/Safari updates).
-- Mises à jour majeures de frameworks, OS (iOS, Android, Windows) ou modèles d'IA.
-- Rachets d'entreprises Tech majeures ou nouvelles réglementations (RGPD, AI Act).
-
-🟢 [INFO] (Veille classique / Culture Tech) :
-- Annonces de nouveaux gadgets/smartphones, sorties de bêtas.
-- Outils open-source, tutoriels, astuces de dev/sysadmin.
-- Articles de réflexion, nouveautés mineures d'applications.
-"""
-
-    prompt = f"""Tu es un Tech Lead expert en veille informatique (SysAdmin, Cloud, Cyber, Dev, AI, Consumer Tech).
-
-{SYSTEM_PROMPT}
-
-Voici une liste d'articles bruts collectés aujourd'hui sur divers flux RSS :
-
-{articles_text}
-
----
-CONTEXTE HISTORIQUE DU JOUR PRÉCÉDENT (J-1) :
-{memory_j_minus_1 if memory_j_minus_1 else "Aucun historique disponible."}
----
-
-CONSIGNES STRICTES :
-1. Sélectionne uniquement le TOP 10 à 25 des actualités les plus pertinentes et majeures du jour. Élimine le bruit, les publicités et les sujets trop secondaires.
-2. Dédoublonne les articles qui parlent du même sujet en gardant la source la plus complète. Ne répète pas les sujets déjà traités dans l'historique J-1.
-3. Pour chaque article retenu, remplis les champs suivants :
-   - "title": Titre court et percutant en français.
-   - "category": L'une des catégories suivantes : "CYBER", "CLOUD", "IA", "SOFTWARE", "HARDWARE".
-   - "urgency": Urgence ("CRITIQUE" pour failles majeures/alertes, "ÉVOLUTION" pour maj/annonces produit, "INFO" pour le reste).
-   - "summary": Résumé en 2-3 phrases claires en français (utilise du Markdown léger comme **termes clés** si pertinent).
-   - "impact": 1 phrase expliquant pourquoi c'est important techniquement.
-   - "source_name": Nom du média source.
-   - "source_url": URL exacte de l'article.
-4. Génère également entre 5 et 7 hashtags ("tags") représentatifs des thèmes forts du jour (ex: ["#Cyber", "#Kubernetes", "#Apple", "#Python"]).
-
-Réponds EXCLUSIVEMENT sous forme d'un objet JSON strict respectant la structure suivante :
+Renvoie UNIQUEMENT un objet JSON valide structuré comme suit :
 {{
-  "tags": ["#Tag1", "#Tag2"],
-  "articles": [
-    {{
-      "title": "...",
-      "category": "CYBER",
-      "urgency": "CRITIQUE",
-      "summary": "...",
-      "impact": "...",
-      "source_name": "...",
-      "source_url": "..."
-    }}
-  ]
+  "en_bref": [
+    "Puce 1...",
+    "Puce 2..."
+  ],
+  "categories": {{
+    "🛡️ Cybersécurité & Vulnérabilités": [
+      {{
+        "title": "🔴 [CRITIQUE] Titre de l'article",
+        "link": "https://...",
+        "summary": "Résumé clair et percutant."
+      }}
+    ],
+    "🤖 Intelligence Artificielle & Data": [],
+    "💻 Développement, DevOps & Cloud": [],
+    "📱 Consumer Tech, Hardware & OS": [],
+    "🌐 Écosystème IT, Digital & Innovation": []
+  }}
 }}
 """
+    try:
+        response = model.generate_content(prompt)
+        text = response.text
+        json_match = re.search(r"\{.*\}", text, re.DOTALL)
+        if json_match:
+            return json.loads(json_match.group(0))
+        return json.loads(text)
+    except Exception as e:
+        print(f"❌ [GEMINI ERROR] Échec du traitement IA : {e}")
+        return {
+            "en_bref": ["Erreur de traitement IA lors de la génération."],
+            "categories": {}
+        }
 
-    model = genai.GenerativeModel(
-        model_name="gemini-3.5-flash-lite",
-        generation_config={"response_mime_type": "application/json"}
-    )
+def process_weekly_top_with_gemini(weekly_history_text):
+    """
+    Analyse l'historique de la semaine et génère la synthèse des failles critiques.
+    Format orienté 'Impact Utilisateur' (iPhone, Mac, PC, Box Internet) SANS jargon dev.
+    """
+    print("🧠 [GEMINI] Génération du Bilan Hebdomadaire des Failles Critiques (Dimanche)...")
+    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+    
+    safety_settings = [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    ]
+    
+    model = genai.GenerativeModel("gemini-3.5-flash-lite", safety_settings=safety_settings)
+    
+    prompt = f"""
+Tu es un expert en cybersécurité et vulgarisation grand public.
+Voici l'historique des vulnérabilités extraites des 7 derniers jours :
+{weekly_history_text}
 
-    for attempt in range(2):
-        try:
-            print(f"🤖 [GEMINI] Envoi de la requête en JSON structuré (Tentative {attempt+1}/2)...")
-            response = model.generate_content(prompt)
-            data = json.loads(response.text)
-            print(f"✅ [GEMINI] Synthèse générée avec succès ({len(data.get('articles', []))} articles retenus).")
-            return data
-        except Exception as e:
-            print(f"⚠️ [GEMINI ERROR] Tentative {attempt+1} échouée : {e}")
-            if attempt == 1:
-                print("❌ [GEMINI] Échec définitif après 2 tentatives.")
-                raise e
+CONSIGNES STRICTES :
+1. Extrais uniquement les failles réellement 🔴 [CRITIQUE] apparues cette semaine.
+2. S'il y a 3 failles critiques ➔ Fais un Top 3. S'il y en a moins (1 ou 2) ➔ Fais un Top 1 ou Top 2 (NE FORCE PAS du remplissage avec des failles mineures !). S'il n'y en a aucune, indique qu'aucune faille critique majeure n'a été recensée cette semaine.
+3. Formule le contenu en mode "IMPACT UTILISATEUR" (pour quelqu'un qui possède un iPhone, Mac, PC, Box Internet) SANS jargon de développeur inutile.
+
+Chaque élément de la liste doit comporter :
+- "title": Nom complet de la faille / Référence CVE
+- "en_gros": Explication simple en 1 phrase claire
+- "patch_status": Indicateur de statut du patch (ex: "✅ Patch officiel disponible." ou "❌ Aucun patch disponible pour l'instant (Zero-Day).")
+- "impact": Précision claire sur les appareils de l'utilisateur touchés et l'action simple à faire (ex: "📲 Concerne ton Mac et ton iPhone. Lance la dernière mise à jour iOS/macOS.")
+
+Renvoie UNIQUEMENT un objet JSON valide structuré comme suit :
+{{
+  "count": 2,
+  "top_failles": [
+    {{
+      "title": "🔴 Faille critique Google Chrome & Safari — CVE-2026-XXXX",
+      "en_gros": "Un pirate peut prendre le contrôle du navigateur si tu visites un site piégé.",
+      "patch_status": "✅ Patch officiel disponible.",
+      "impact": "📲 Concerne ton Mac et ton iPhone. Il te suffit de faire la dernière mise à jour Safari/iOS."
+    }}
+  ],
+  "telegram_summary": "• 🔴 CVE-2026-XXXX — Zero-Day Chrome & iOS\\n• 🔴 CVE-2026-YYYY — Bypass Auth VPN"
+}}
+"""
+    try:
+        response = model.generate_content(prompt)
+        text = response.text
+        json_match = re.search(r"\{.*\}", text, re.DOTALL)
+        if json_match:
+            return json.loads(json_match.group(0))
+        return json.loads(text)
+    except Exception as e:
+        print(f"⚠️ [GEMINI WEEKLY TOP ERROR] Échec de la génération du Top hebdo : {e}")
+        return None
 
 # ---------------------------------------------------------------------------
-# 6. HELPERS RENDU NOTION
+# 6. CRÉATION & FORMATAGE DE LA PAGE NOTION
 # ---------------------------------------------------------------------------
-def parse_markdown_to_rich_text(text):
-    rich_text = []
-    pattern = r"(\*\*.+?\*\*|\[.+?\]\(https?://[^\s\)]+\))"
-    tokens = re.split(pattern, text)
-
-    for token in tokens:
-        if not token:
-            continue
-        if token.startswith("**") and token.endswith("**"):
-            rich_text.append({
-                "type": "text",
-                "text": {"content": token[2:-2]},
-                "annotations": {"bold": True}
-            })
-        elif token.startswith("[") and "](" in token and token.endswith(")"):
-            m = re.match(r"\[(.+?)\]\((https?://[^\s\)]+)\)", token)
-            if m:
-                rich_text.append({
+def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_page_id=None, weekly_top_data=None):
+    print("📝 [NOTION] Création / Remplacement de la page Journal Notion...")
+    database_id = os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PAGE_ID")
+    headers = get_notion_headers()
+    
+    if existing_page_id:
+        print(f"🧹 [NOTION CLEANUP] Archivage de l'ancienne page du jour ({existing_page_id})...")
+        archive_url = f"https://api.notion.com/v1/pages/{existing_page_id}"
+        requests.patch(archive_url, headers=headers, json={"archived": True})
+        
+    page_title = f"Veille Tech - {today_str}"
+    blocks = []
+    
+    # BLOC APPEL EN TÊTE - FLUX RSS INDISPONIBLES
+    if failed_feeds:
+        failed_list = ", ".join([f.split('/')[2] for f in failed_feeds if '/' in f])
+        blocks.append({
+            "object": "block",
+            "type": "callout",
+            "callout": {
+                "icon": {"emoji": "⚠️"},
+                "color": "yellow_background",
+                "rich_text": [{
                     "type": "text",
-                    "text": {"content": m.group(1), "link": {"url": m.group(2)}}
+                    "text": {"content": f"Information : {len(failed_feeds)} flux RSS n'ont pas pu être joints aujourd'hui ({failed_list}). La collecte s'est poursuivie normalement sur les autres sources."}
+                }]
+            }
+        })
+
+    # BLOC CALLOUT TOP FAILLES DE LA SEMAINE (UNIZUEMENT LE DIMANCHE)
+    if weekly_top_data and weekly_top_data.get("top_failles"):
+        top_list = weekly_top_data.get("top_failles", [])
+        count = weekly_top_data.get("count", len(top_list))
+        
+        callout_texts = [{"type": "text", "text": {"content": f"🚨 TOP FAILLES CRITIQUES DE LA SEMAINE ({count})\n\n"}}]
+        
+        for idx, item in enumerate(top_list, 1):
+            callout_texts.append({"type": "text", "text": {"content": f"{idx}. {item.get('title', '')}\n"}, "annotations": {"bold": True}})
+            callout_texts.append({"type": "text", "text": {"content": f"• En gros : {item.get('en_gros', '')}\n"}})
+            callout_texts.append({"type": "text", "text": {"content": f"• Statut du patch : {item.get('patch_status', '')}\n"}})
+            callout_texts.append({"type": "text", "text": {"content": f"• Impact pour toi : {item.get('impact', '')}\n\n"}})
+            
+        blocks.append({
+            "object": "block",
+            "type": "callout",
+            "callout": {
+                "icon": {"emoji": "🚨"},
+                "color": "red_background",
+                "rich_text": callout_texts
+            }
+        })
+        
+    # SECTION EN BREF
+    en_bref_items = gemini_data.get("en_bref", [])
+    if en_bref_items:
+        blocks.append({
+            "object": "block",
+            "type": "heading_2",
+            "heading_2": {
+                "rich_text": [{"type": "text", "text": {"content": "🚀 En bref"}}]
+            }
+        })
+        for item in en_bref_items:
+            blocks.append({
+                "object": "block",
+                "type": "bulleted_list_item",
+                "bulleted_list_item": {
+                    "rich_text": [{"type": "text", "text": {"content": item}}]
+                }
+            })
+
+    # SECTION CATEGORIES / TOGGLES
+    categories = gemini_data.get("categories", {})
+    for cat_name, articles in categories.items():
+        if not articles:
+            continue
+            
+        toggle_children = []
+        for art in articles:
+            title = art.get("title", "Article")
+            link = art.get("link", "")
+            summary = art.get("summary", "")
+            
+            rich_title = []
+            if link:
+                rich_title.append({
+                    "type": "text",
+                    "text": {"content": title, "link": {"url": link}},
+                    "annotations": {"bold": True, "color": "blue"}
                 })
             else:
-                rich_text.append({"type": "text", "text": {"content": token}})
-        else:
-            rich_text.append({"type": "text", "text": {"content": token}})
-    
-    return rich_text
-
-def execute_notion_request_with_retry(method, url, headers, json_payload, max_retries=3):
-    for attempt in range(max_retries):
-        try:
-            if method.upper() == "POST":
-                resp = requests.post(url, headers=headers, json=json_payload, timeout=10)
-            elif method.upper() == "PATCH":
-                resp = requests.patch(url, headers=headers, json=json_payload, timeout=10)
-            
-            if resp.status_code in [200, 201]:
-                return resp
-            else:
-                print(f"⚠️ [NOTION API] Statut HTTP {resp.status_code} (Tentative {attempt+1}/{max_retries}) : {resp.text}")
-        except Exception as e:
-            print(f"⚠️ [NOTION RETRY] Exception réseau : {e} (Tentative {attempt+1}/{max_retries})")
-        
-        time.sleep(2)
-    
-    raise Exception(f"❌ [NOTION API] Impossible d'exécuter la requête {method} sur {url}")
-
-# ---------------------------------------------------------------------------
-# 7. CREATION PAGE NOTION
-# ---------------------------------------------------------------------------
-def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_page_id=None):
-    notion_token = os.getenv("NOTION_TOKEN") or os.getenv("NOTION_API_TOKEN")
-    parent_id = os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PAGE_ID")
-
-    headers = {
-        "Authorization": f"Bearer {notion_token}",
-        "Notion-Version": "2022-06-28",
-        "Content-Type": "application/json"
-    }
-
-    articles = gemini_data.get("articles", [])
-    tags = gemini_data.get("tags", [])
-
-    total_words = 0
-    for a in articles:
-        total_words += len(a.get("summary", "").split())
-        total_words += len(a.get("impact", "").split())
-    
-    reading_time = max(1, math.ceil(total_words / 200)) if articles else 0
-
-    callout_text = f"⏱️ Temps de lecture estimé : {reading_time} min\n"
-    if tags:
-        callout_text += f"🏷️ Mots-clés du jour : {' '.join(tags)}"
-    if failed_feeds:
-        callout_text += f"\n⚠️ Source(s) non disponible(s) ({len(failed_feeds)}/{len(RSS_FEEDS)}) : {', '.join(failed_feeds)}"
-
-    header_callout = {
-        "object": "block",
-        "type": "callout",
-        "callout": {
-            "icon": {"emoji": "📌"},
-            "rich_text": [{"type": "text", "text": {"content": callout_text}}]
-        }
-    }
-
-    all_blocks = [header_callout]
-
-    if not articles:
-        no_article_block = {
-            "object": "block",
-            "type": "paragraph",
-            "paragraph": {
-                "rich_text": [{"type": "text", "text": {"content": "ℹ️ Aucune actualité majeure identifiée sur les dernières 24h."}}]
-            }
-        }
-        all_blocks.append(no_article_block)
-    else:
-        grouped = {}
-        for a in articles:
-            raw_cat = str(a.get("category", "")).upper().strip()
-            cat_name = CATEGORIES_MAP.get(raw_cat, DEFAULT_CATEGORY)
-            grouped.setdefault(cat_name, []).append(a)
-
-        urgency_order = {"CRITIQUE": 1, "ÉVOLUTION": 2, "INFO": 3}
-
-        for cat_name in sorted(grouped.keys()):
-            cat_articles = grouped[cat_name]
-            cat_articles.sort(key=lambda x: urgency_order.get(str(x.get("urgency", "")).upper(), 99))
-
-            toggle_children = []
-            for item in cat_articles:
-                urg = str(item.get("urgency", "")).upper()
-                badge = "🔴 [CRITIQUE]" if urg == "CRITIQUE" else ("🟠 [ÉVOLUTION]" if urg == "ÉVOLUTION" else "🟢 [INFO]")
-                title_str = f"{badge} {item.get('title', '')}"
-
-                summary_rich = parse_markdown_to_rich_text(item.get("summary", ""))
-                impact_rich = parse_markdown_to_rich_text(item.get("impact", ""))
-                source_url = item.get("source_url", "")
-                source_name = item.get("source_name", "Source")
-
-                item_bullet = {
-                    "object": "block",
-                    "type": "bulleted_list_item",
-                    "bulleted_list_item": {
-                        "rich_text": [{"type": "text", "text": {"content": title_str}, "annotations": {"bold": True}}],
-                        "children": [
-                            {
-                                "object": "block",
-                                "type": "paragraph",
-                                "paragraph": {
-                                    "rich_text": [{"type": "text", "text": {"content": "📝 Résumé : "}, "annotations": {"bold": True}}] + summary_rich
-                                }
-                            },
-                            {
-                                "object": "block",
-                                "type": "paragraph",
-                                "paragraph": {
-                                    "rich_text": [
-                                        {"type": "text", "text": {"content": "💡 Impact : "}, "annotations": {"bold": True}}
-                                    ] + impact_rich
-                                }
-                            },
-                            {
-                                "object": "block",
-                                "type": "paragraph",
-                                "paragraph": {
-                                    "rich_text": [
-                                        {"type": "text", "text": {"content": "🔗 Source : "}, "annotations": {"bold": True}},
-                                        {"type": "text", "text": {"content": source_name, "link": {"url": source_url}}} if source_url else {"type": "text", "text": {"content": source_name}}
-                                    ]
-                                }
-                            }
-                        ]
-                    }
-                }
-                toggle_children.append(item_bullet)
-
-            toggle_block = {
+                rich_title.append({
+                    "type": "text",
+                    "text": {"content": title},
+                    "annotations": {"bold": True}
+                })
+                
+            toggle_children.append({
                 "object": "block",
-                "type": "toggle",
-                "toggle": {
-                    "rich_text": [{"type": "text", "text": {"content": cat_name}, "annotations": {"bold": True}}],
-                    "children": toggle_children
+                "type": "bulleted_list_item",
+                "bulleted_list_item": {
+                    "rich_text": rich_title,
+                    "children": [
+                        {
+                            "object": "block",
+                            "type": "paragraph",
+                            "paragraph": {
+                                "rich_text": [{"type": "text", "text": {"content": summary}}]
+                            }
+                        }
+                    ]
                 }
+            })
+            
+        blocks.append({
+            "object": "block",
+            "type": "toggle",
+            "toggle": {
+                "rich_text": [{"type": "text", "text": {"content": f"{cat_name} ({len(articles)})"}}],
+                "children": toggle_children
             }
-            all_blocks.append(toggle_block)
+        })
 
-    chunks = [all_blocks[i:i + 100] for i in range(0, len(all_blocks), 100)]
-
-    if existing_page_id:
-        print(f"♻️ [NOTION] Réinjection des blocs dans la page existante ({existing_page_id})...")
-        page_id = existing_page_id
-        page_res = requests.get(f"https://api.notion.com/v1/pages/{page_id}", headers=headers)
-        page_url = page_res.json().get("url", "") if page_res.status_code == 200 else f"https://notion.so/{page_id.replace('-', '')}"
-        
-        for idx, chunk in enumerate(chunks, 1):
-            print(f"📦 [NOTION] Ingestion du paquet #{idx} ({len(chunk)} blocks)...")
-            patch_url = f"https://api.notion.com/v1/blocks/{page_id}/children"
-            execute_notion_request_with_retry("PATCH", patch_url, headers, {"children": chunk})
-    else:
-        first_chunk = chunks[0] if chunks else []
-        remaining_chunks = chunks[1:] if len(chunks) > 1 else []
-
-        page_payload = {
-            "parent": {"page_id": parent_id},
-            "properties": {
-                "title": [{"text": {"content": f"Veille Tech - {today_str}"}}]
-            },
-            "children": first_chunk
-        }
-
-        print("📝 [NOTION] Création de la page Notion...")
-        try:
-            res = execute_notion_request_with_retry("POST", "https://api.notion.com/v1/pages", headers, page_payload, max_retries=1)
-        except Exception:
-            print("🔄 [NOTION] Bascule sur le mode Database Parent...")
-            db_payload = {
-                "parent": {"database_id": parent_id},
-                "properties": {
-                    "Name": {"title": [{"text": {"content": f"Veille Tech - {today_str}"}}]}
-                },
-                "children": first_chunk
+    # CRÉATION DE LA PAGE DANS NOTION
+    create_url = "https://api.notion.com/v1/pages"
+    payload = {
+        "parent": {"database_id": database_id},
+        "properties": {
+            "Name": {
+                "title": [{"type": "text", "text": {"content": page_title}}]
             }
-            res = execute_notion_request_with_retry("POST", "https://api.notion.com/v1/pages", headers, db_payload, max_retries=3)
-
+        },
+        "children": blocks[:100]
+    }
+    
+    res = requests.post(create_url, headers=headers, json=payload)
+    if res.status_code == 200:
         page_data = res.json()
-        page_id = page_data.get("id")
-        page_url = page_data.get("url", "")
-
-        for idx, chunk in enumerate(remaining_chunks, 1):
-            print(f"📦 [NOTION] Ingestion du paquet supplémentaire #{idx} ({len(chunk)} blocks)...")
-            patch_url = f"https://api.notion.com/v1/blocks/{page_id}/children"
-            execute_notion_request_with_retry("PATCH", patch_url, headers, {"children": chunk})
-
-    print(f"✅ [NOTION] Page Notion mise à jour avec succès ! URL : {page_url}")
-    return page_url, reading_time
+        page_id_raw = page_data.get("id", "").replace("-", "")
+        page_url = f"https://notion.so/{page_id_raw}"
+        
+        total_words = sum([len(a.get("summary", "").split()) for c in categories.values() for a in c])
+        reading_time = max(1, math.ceil(total_words / 200))
+        
+        print(f"✅ [NOTION] Page créée avec succès : {page_url}")
+        return page_url, reading_time
+    else:
+        print(f"❌ [NOTION ERROR] Statut HTTP {res.status_code} : {res.text}")
+        return "https://notion.so", 1
 
 # ---------------------------------------------------------------------------
-# 8. NOTIFICATION TELEGRAM (FORMAT HTML & LIEN PERSONNALISÉ)
+# 7. TELEGRAM PUSH NOTIFICATION
 # ---------------------------------------------------------------------------
-def send_telegram_notification(today_str, page_url, article_count, reading_time, tags, failed_feeds):
+def send_telegram_notification(today_str, articles_count, reading_time, page_url, weekly_top_data=None):
+    print("📲 [TELEGRAM] Envoi de la notification push...")
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
-
-    if article_count == 0:
-        message = f"ℹ️ <b>Veille du {today_str}</b> : 0 article aujourd'hui."
-    else:
-        tags_str = " ".join(tags) if tags else "#TechWatch"
-        message = (
-            f"✅ <b>Veille Tech du {today_str} est disponible !</b>\n\n"
-            f"📊 <b>{article_count}</b> articles analysés | ⏱️ <b>{reading_time} min</b> de lecture\n"
-            f"🏷️ {tags_str}\n"
-        )
-        if failed_feeds:
-            message += f"⚠️ {len(failed_feeds)} source(s) indisponible(s)\n"
-
-        # Bouton/Hyperlien HTML épuré
-        message += f'\n👉 <a href="{page_url}"><b>📖 Ouvrir le Journal dans Notion</b></a>'
-
+    
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    
+    msg = f"📊 *Veille Tech du {today_str}*\n\n"
+    msg += f"• *{articles_count} articles* synthétisés\n"
+    msg += f"• Temps de lecture : *~{reading_time} min*\n\n"
+    
+    if weekly_top_data and weekly_top_data.get("telegram_summary"):
+        msg += "🚨 *FAILLES CRITIQUES DE LA SEMAINE*\n"
+        msg += weekly_top_data.get("telegram_summary") + "\n\n"
+        
+    msg += f"🔗 [Consulter le journal complet sur Notion]({page_url})"
+    
     payload = {
         "chat_id": chat_id,
-        "text": message,
-        "parse_mode": "HTML",
+        "text": msg,
+        "parse_mode": "Markdown",
         "disable_web_page_preview": False
     }
-
+    
     try:
         resp = requests.post(url, json=payload, timeout=10)
         if resp.status_code == 200:
-            print("📲 [TELEGRAM] Notification envoyée avec succès sur iPhone !")
+            print("✅ [TELEGRAM] Notification envoyée avec succès sur iPhone !")
         else:
-            print(f"⚠️ [TELEGRAM ERROR] Statut HTTP {resp.status_code} : {resp.text}")
+            print(f"⚠️ [TELEGRAM WARNING] Échec Markdown (HTTP {resp.status_code}). Tentative en texte brut...")
+            plain_msg = f"📊 Veille Tech du {today_str}\n\n• {articles_count} articles synthétisés\n• Temps de lecture : ~{reading_time} min\n\n"
+            if weekly_top_data and weekly_top_data.get("telegram_summary"):
+                plain_msg += f"🚨 FAILLES CRITIQUES DE LA SEMAINE :\n{weekly_top_data.get('telegram_summary')}\n\n"
+            plain_msg += f"Consulter le journal sur Notion : {page_url}"
+            
+            resp_fallback = requests.post(url, json={"chat_id": chat_id, "text": plain_msg}, timeout=10)
+            if resp_fallback.status_code == 200:
+                print("✅ [TELEGRAM] Notification fallback envoyée avec succès !")
     except Exception as e:
         print(f"❌ [TELEGRAM ERROR] Exception lors de l'envoi : {e}")
 
@@ -675,17 +556,39 @@ def main():
     today_str = paris_time.strftime("%d/%m/%Y")
     yesterday_str = (paris_time - datetime.timedelta(days=1)).strftime("%d/%m/%Y")
 
+    # Détection du jour (6 = Dimanche)
+    is_sunday = (paris_time.weekday() == 6)
+    weekly_top_data = None
+    
+    if is_sunday:
+        print("📅 [SUNDAY DETECTED] Dimanche détecté. Lancement de l'analyse hebdo des failles critiques...")
+        weekly_history_text = get_weekly_notion_history()
+        if weekly_history_text:
+            weekly_top_data = process_weekly_top_with_gemini(weekly_history_text)
+
     memory_j_minus_1, existing_today_page_id = manage_notion_pages(today_str, yesterday_str)
     raw_articles, failed_feeds = asyncio.run(collect_rss_articles_async())
     gemini_data = process_with_gemini(raw_articles, memory_j_minus_1)
 
-    page_url, reading_time = create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_page_id=existing_today_page_id)
+    page_url, reading_time = create_notion_journal_page(
+        today_str, 
+        gemini_data, 
+        failed_feeds, 
+        existing_page_id=existing_today_page_id,
+        weekly_top_data=weekly_top_data
+    )
 
-    articles_count = len(gemini_data.get("articles", []))
-    tags = gemini_data.get("tags", [])
-    send_telegram_notification(today_str, page_url, articles_count, reading_time, tags, failed_feeds)
-
-    print("🎉 [FINISHED] Pipeline terminé avec succès !")
+    articles_count = sum([len(arts) for arts in gemini_data.get("categories", {}).values()])
+    
+    send_telegram_notification(
+        today_str, 
+        articles_count, 
+        reading_time, 
+        page_url,
+        weekly_top_data=weekly_top_data
+    )
+    
+    print("🎉 [SUCCESS] Pipeline exécuté et terminé avec succès !")
 
 if __name__ == "__main__":
     main()

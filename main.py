@@ -375,6 +375,7 @@ Chaque élément de la liste doit comporter :
 - "en_gros": Explication simple en 1 phrase claire
 - "patch_status": Indicateur de statut du patch (ex: "✅ Patch officiel disponible." ou "❌ Aucun patch disponible pour l'instant (Zero-Day).")
 - "impact": Précision claire sur les appareils de l'utilisateur touchés et l'action simple à faire (ex: "📲 Concerne ton Mac et ton iPhone. Lance la dernière mise à jour iOS/macOS.")
+- "date_annonce": Date d'annonce / publication de la faille au format "DD/MM/YYYY" (ex: "30/07/2026"). Si non précisée, utilise la date de l'article source.
 
 Renvoie UNIQUEMENT un objet JSON valide structuré comme suit :
 {{
@@ -384,10 +385,11 @@ Renvoie UNIQUEMENT un objet JSON valide structuré comme suit :
       "title": "🔴 Faille critique Google Chrome & Safari — CVE-2026-XXXX",
       "en_gros": "Un pirate peut prendre le contrôle du navigateur si tu visites un site piégé.",
       "patch_status": "✅ Patch officiel disponible.",
-      "impact": "📲 Concerne ton Mac et ton iPhone. Il te suffit de faire la dernière mise à jour Safari/iOS."
+      "impact": "📲 Concerne ton Mac et ton iPhone. Il te suffit de faire la dernière mise à jour Safari/iOS.",
+      "date_annonce": "30/07/2026"
     }}
   ],
-  "telegram_summary": "• 🔴 CVE-2026-XXXX — Zero-Day Chrome & iOS\\n• 🔴 CVE-2026-YYYY — Bypass Auth VPN"
+  "telegram_summary": "• 🔴 Faille Chrome (CVE-2026-XXXX) — Zero-Day (30/07)\\n• 🔴 Faille VPN (CVE-2026-YYYY) — Bypass Auth (29/07)"
 }}
 """
     try:
@@ -484,6 +486,8 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_pa
         
         for idx, item in enumerate(top_list, 1):
             callout_texts.append({"type": "text", "text": {"content": f"{idx}. {item.get('title', '')}\n"}, "annotations": {"bold": True}})
+            if item.get("date_annonce"):
+                callout_texts.append({"type": "text", "text": {"content": f"• Date d'annonce : 🗓️ {item.get('date_annonce')}\n"}})
             callout_texts.append({"type": "text", "text": {"content": f"• En gros : {item.get('en_gros', '')}\n"}})
             callout_texts.append({"type": "text", "text": {"content": f"• Statut du patch : {item.get('patch_status', '')}\n"}})
             callout_texts.append({"type": "text", "text": {"content": f"• Impact pour toi : {item.get('impact', '')}\n\n"}})

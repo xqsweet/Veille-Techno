@@ -629,13 +629,16 @@ def send_telegram_notification(today_str, articles_count, reading_time, page_url
         msg += "🚨 *FAILLES CRITIQUES DE LA SEMAINE*\n"
         msg += weekly_top_data.get("telegram_summary") + "\n\n"
         
-    msg += f"🔗 [Consulter le journal sur Notion]({page_url})"
+    notion_app_url = page_url.replace("https://", "notion://")
+    
+    msg += f"📱 [Ouvrir dans l'App Notion]({notion_app_url})\n"
+    msg += f"🌐 [Ouvrir sur le Web]({page_url})"
     
     payload = {
         "chat_id": chat_id,
         "text": msg,
         "parse_mode": "Markdown",
-        "disable_web_page_preview": False
+        "disable_web_page_preview": True
     }
     
     try:
@@ -647,7 +650,8 @@ def send_telegram_notification(today_str, articles_count, reading_time, page_url
             plain_msg = f"📊 Veille Tech du {today_str}\n\n• {articles_count} articles synthétisés\n• Temps de lecture : ~{reading_time} min\n\n"
             if weekly_top_data and weekly_top_data.get("telegram_summary"):
                 plain_msg += f"🚨 FAILLES CRITIQUES DE LA SEMAINE :\n{weekly_top_data.get('telegram_summary')}\n\n"
-            plain_msg += f"Consulter le journal sur Notion : {page_url}"
+            plain_msg += f"📱 App Notion : {notion_app_url}\n"
+            plain_msg += f"🌐 Web Notion : {page_url}"
             
             resp_fallback = requests.post(url, json={"chat_id": chat_id, "text": plain_msg}, timeout=10)
             if resp_fallback.status_code == 200:

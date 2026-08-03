@@ -1,1 +1,38 @@
-__pycache__
+# Secrets et variables d'environnement (NE JAMAIS COMMITTER)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Cache et bytecode Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Environnements virtuels Python
+.venv/
+venv/
+env/
+ENV/
+
+# Fichiers système et éditeurs
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Surcharges et logs locaux
+*.log
+logs/
+tmp/
+scratch/

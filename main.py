@@ -538,7 +538,7 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_pa
                 rich_title.append({
                     "type": "text",
                     "text": {"content": title, "link": {"url": link}},
-                    "annotations": {"bold": True, "color": "blue"}
+                    "annotations": {"bold": True, "color": "orange"}
                 })
             else:
                 rich_title.append({

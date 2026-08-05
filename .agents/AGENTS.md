@@ -7,3 +7,10 @@
   2. Utiliser `python scripts/notion_ideas.py` uniquement en secours (fallback) si le serveur MCP est indisponible.
 - Le fichier `roadmap/boite-a-idees.md` sert d'export/backup Markdown local.
 
+### 📌 Valeurs Strictes des Statuts Notion (Base "Boîte à Idées")
+Lors de la mise à jour de la propriété `Statut` d'une carte dans la base Notion via le serveur MCP, utiliser **EXACTEMENT** les libellés de sélection suivants (avec leurs emojis et préfixes) pour éviter la création de doublons ou de nouvelles colonnes grisées :
+- `🟡 À l'étude` (Jaune)
+- `🟢 Approuvé` (Vert)
+- `🔵 En cours` (Bleu)
+- `🔴 Rejeté` (Rouge)
+- `✅ Terminé` (Vert)

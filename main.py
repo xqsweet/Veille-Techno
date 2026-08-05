@@ -392,6 +392,89 @@ Renvoie UNIQUEMENT un objet JSON valide structuré comme suit :
             "categories": {}
         }
 
+def analyze_critical_vulnerabilities_deep_dive(critical_articles):
+    """
+    Analyse approfondie Gemini pour produire un plan d'action immédiat
+    sur les failles 🔴 [CRITIQUE] (seuil CVSS >= 8.0).
+    """
+    if not critical_articles:
+        return []
+        
+    print(f"🚨 [DEEP DIVE] Analyse approfondie Gemini lancée sur {len(critical_articles)} failles critiques...")
+    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+    
+    safety_settings = [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    ]
+    
+    model = genai.GenerativeModel("gemini-3.5-flash-lite", safety_settings=safety_settings)
+    
+    prompt = f"""
+Tu es un ingénieur Tech Lead expert en cybersécurité (CSIRT / SOC).
+Voici des articles identifiés comme potentiellement 🔴 [CRITIQUE] aujourd'hui :
+{json.dumps(critical_articles, ensure_ascii=False, indent=2)}
+
+CONSIGNES STRICTES DE TRAITEMENT :
+1. Détermine si chaque article concerne RÉELLEMENT une vulnérabilité informatique / faille de sécurité ("is_vulnerability": true). Si c'est une simple panne cloud ou actualité sans faille, mets "is_vulnerability": false.
+2. Pour chaque vraie vulnérabilité :
+   - "cve_id" : Identifiant CVE si disponible (ex: "CVE-2024-1234") ou "Zero-Day sans CVE" sinon.
+   - "cvss_score" : Score CVSS estimé ou officiel sous la forme d'un nombre (ex: 9.8). Si CVSS < 8.0, mets "is_critical_enough": false.
+   - "impacted_versions" : Produits et versions exactes touchés (ex: "Chrome < v124.0.6, Safari iOS < 17.4").
+   - "action_required" : Action corrective simple et immédiate (ex: "Relancer Chrome et appliquer la mise à jour").
+   - "workaround" : Contournement temporaire s'il existe (ex: "Désactiver JavaScript"), ou null si aucun contournement disponible.
+
+Renvoie UNIQUEMENT un objet JSON valide structuré comme suit :
+{{
+  "deep_dives": [
+    {{
+      "is_vulnerability": true,
+      "is_critical_enough": true,
+      "title": "Titre explicite de la faille",
+      "cve_id": "CVE-2024-XXXX",
+      "cvss_score": 9.8,
+      "impacted_versions": "Chrome < v124.0",
+      "action_required": "Mettre à jour Chrome immédiatement.",
+      "workaround": null
+    }}
+  ]
+}}
+"""
+    try:
+        response = model.generate_content(prompt)
+        text = response.text
+        json_match = re.search(r"\{.*\}", text, re.DOTALL)
+        if json_match:
+            data = json.loads(json_match.group(0))
+        else:
+            data = json.loads(text)
+            
+        valid_deep_dives = []
+        for item in data.get("deep_dives", []):
+            if item.get("is_vulnerability", True) and item.get("is_critical_enough", True):
+                valid_deep_dives.append(item)
+                
+        print(f"✅ [DEEP DIVE] {len(valid_deep_dives)} plans d'action générés.")
+        return valid_deep_dives
+    except Exception as e:
+        print(f"⚠️ [DEEP DIVE WARNING] Échec de l'analyse approfondie (continuations silencieuse) : {e}")
+        # Fallback de secours basé sur le résumé de base
+        fallback_dives = []
+        for art in critical_articles[:2]:
+            fallback_dives.append({
+                "is_vulnerability": True,
+                "is_critical_enough": True,
+                "title": art.get("title", "Faille Critique"),
+                "cve_id": "CVE-Inconnue",
+                "cvss_score": 8.5,
+                "impacted_versions": "Consulter l'article source",
+                "action_required": "Vérifier et appliquer les derniers patchs de sécurité.",
+                "workaround": None
+            })
+        return fallback_dives
+
 def process_weekly_top_with_gemini(weekly_history_text):
     """
     Analyse l'historique de la semaine et génère la synthèse des failles critiques.
@@ -478,7 +561,7 @@ def parse_markdown_to_rich_text(text):
                 })
     return rich_text
 
-def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_page_id=None, weekly_top_data=None):
+def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_page_id=None, weekly_top_data=None, deep_dives_data=None):
     print("📝 [NOTION] Création / Remplacement de la page Journal Notion...")
     target_id = os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PAGE_ID")
     headers = get_notion_headers()
@@ -525,6 +608,36 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_pa
             ]
         }
     })
+
+    # 2.BIS. BLOCS CALLOUT DEEP DIVE FAILLE CRITIQUE (COMPACTÉS EN 1 BLOC PAR FAILLE)
+    if deep_dives_data:
+        for dd in deep_dives_data:
+            cve = dd.get("cve_id", "CVE-Inconnue")
+            score = dd.get("cvss_score", 8.0)
+            title = dd.get("title", "Faille de sécurité majeure")
+            versions = dd.get("impacted_versions", "Consulter l'article")
+            action = dd.get("action_required", "Mise à jour immédiate requise")
+            workaround = dd.get("workaround")
+
+            dd_text = [
+                {"type": "text", "text": {"content": f"🚨 PLAN D'ACTION IMMÉDIAT — {cve}\n"}, "annotations": {"bold": True}},
+                {"type": "text", "text": {"content": f"Faille : {title}\n"}},
+                {"type": "text", "text": {"content": f"• Sévérité CVSS : {score}/10\n"}},
+                {"type": "text", "text": {"content": f"• Versions touchées : {versions}\n"}},
+                {"type": "text", "text": {"content": f"• Action requise : {action}\n"}}
+            ]
+            if workaround:
+                dd_text.append({"type": "text", "text": {"content": f"• Workaround : {workaround}\n"}})
+
+            blocks.append({
+                "object": "block",
+                "type": "callout",
+                "callout": {
+                    "icon": {"emoji": "🚨"},
+                    "color": "red_background",
+                    "rich_text": dd_text
+                }
+            })
 
     # 3. BLOC CALLOUT TOP FAILLES DE LA SEMAINE (UNIQUEMENT LE DIMANCHE)
     if weekly_top_data and weekly_top_data.get("top_failles"):
@@ -667,14 +780,34 @@ def create_notion_journal_page(today_str, gemini_data, failed_feeds, existing_pa
 # ---------------------------------------------------------------------------
 # 7. TELEGRAM PUSH NOTIFICATION
 # ---------------------------------------------------------------------------
-def send_telegram_notification(today_str, articles_count, reading_time, page_url, weekly_top_data=None):
+def send_telegram_notification(today_str, articles_count, reading_time, page_url, weekly_top_data=None, deep_dives_data=None):
     print("📲 [TELEGRAM] Envoi de la notification push...")
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     
-    msg = f"📊 *Veille Tech du {today_str}*\n\n"
+    msg = ""
+    # Bloc Alerte Prioritaire Deep Dive en haut de message Telegram
+    if deep_dives_data:
+        top_dd = deep_dives_data[0]
+        cve = top_dd.get("cve_id", "CVE-Inconnue")
+        score = top_dd.get("cvss_score", 8.0)
+        action = top_dd.get("action_required", "Mise à jour immédiate")
+        title = top_dd.get("title", "Faille Critique")
+        
+        count_total = len(deep_dives_data)
+        header_tag = f"🚨 *PLAN D'ACTION FAILLE CRITIQUE* (1/{count_total})\n" if count_total > 1 else "🚨 *PLAN D'ACTION FAILLE CRITIQUE*\n"
+        
+        msg += header_tag
+        msg += f"• *Faille :* {title} ({cve})\n"
+        msg += f"• *Danger :* 🔴 {score}/10 (Extrême)\n"
+        msg += f"• *Action :* {action}\n"
+        if count_total > 1:
+            msg += f"_(+ {count_total - 1} autre(s) faille(s) critique(s) détaillée(s) sur Notion)_\n"
+        msg += "───────────────────────────────\n\n"
+
+    msg += f"📊 *Veille Tech du {today_str}*\n\n"
     msg += f"• *{articles_count} articles* synthétisés\n"
     msg += f"• Temps de lecture : *~{reading_time} min*\n\n"
     
@@ -697,7 +830,11 @@ def send_telegram_notification(today_str, articles_count, reading_time, page_url
             print("✅ [TELEGRAM] Notification envoyée avec succès sur iPhone !")
         else:
             print(f"⚠️ [TELEGRAM WARNING] Échec Markdown (HTTP {resp.status_code}). Tentative en texte brut...")
-            plain_msg = f"📊 Veille Tech du {today_str}\n\n• {articles_count} articles synthétisés\n• Temps de lecture : ~{reading_time} min\n\n"
+            plain_msg = ""
+            if deep_dives_data:
+                top_dd = deep_dives_data[0]
+                plain_msg += f"🚨 PLAN D'ACTION FAILLE CRITIQUE :\n• Faille : {top_dd.get('title', '')} ({top_dd.get('cve_id', '')})\n• Danger : 🔴 {top_dd.get('cvss_score', 8.0)}/10\n• Action : {top_dd.get('action_required', '')}\n\n"
+            plain_msg += f"📊 Veille Tech du {today_str}\n\n• {articles_count} articles synthétisés\n• Temps de lecture : ~{reading_time} min\n\n"
             if weekly_top_data and weekly_top_data.get("telegram_summary"):
                 plain_msg += f"🚨 FAILLES CRITIQUES DE LA SEMAINE :\n{weekly_top_data.get('telegram_summary')}\n\n"
             plain_msg += f"Consulter le journal sur Notion : {page_url}"
@@ -748,6 +885,19 @@ def main():
     raw_articles, failed_feeds, cve_kev_set = asyncio.run(collect_rss_articles_async())
     gemini_data = process_with_gemini(raw_articles, memory_j_minus_1)
 
+    # Extraction des articles 🔴 [CRITIQUE] pour le Deep Dive Gemini
+    critical_articles = []
+    for cat_name, cat_articles in gemini_data.get("categories", {}).items():
+        for art in cat_articles:
+            title = art.get("title", "")
+            if "🔴" in title or "CRITIQUE" in title.upper():
+                critical_articles.append(art)
+
+    # Déclenchement conditionnel du Deep Dive Gemini si au moins 1 article 🔴 est présent
+    deep_dives_data = None
+    if critical_articles:
+        deep_dives_data = analyze_critical_vulnerabilities_deep_dive(critical_articles)
+
     # Enrichissement CISA KEV post-Gemini sur la structure JSON finale
     for cat_name, cat_articles in gemini_data.get("categories", {}).items():
         for art in cat_articles:
@@ -771,7 +921,8 @@ def main():
         gemini_data, 
         failed_feeds, 
         existing_page_id=(existing_today_page_id if is_manual else None),
-        weekly_top_data=weekly_top_data
+        weekly_top_data=weekly_top_data,
+        deep_dives_data=deep_dives_data
     )
 
     articles_count = sum([len(arts) for arts in gemini_data.get("categories", {}).values()])
@@ -781,7 +932,8 @@ def main():
         articles_count, 
         reading_time, 
         page_url,
-        weekly_top_data=weekly_top_data
+        weekly_top_data=weekly_top_data,
+        deep_dives_data=deep_dives_data
     )
     
     print("🎉 [SUCCESS] Pipeline exécuté et terminé avec succès !")

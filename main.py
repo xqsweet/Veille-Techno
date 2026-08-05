@@ -123,6 +123,46 @@ async def fetch_feed(session, url, headers):
     print(f"❌ [RSS FAIL] {url} -> {err_desc}")
     return [], url
 
+async def fetch_cisa_kev_catalog_async(session):
+    """
+    Récupère le catalogue public CISA KEV (Known Exploited Vulnerabilities) de façon asynchrone et fail-safe.
+    Retourne un set d'identifiants CVE (ex: {"CVE-2024-1234", ...}).
+    """
+    url = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+    cve_set = set()
+    try:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=6), ssl=False) as response:
+            if response.status == 200:
+                data = await response.json()
+                vulnerabilities = data.get("vulnerabilities", [])
+                for item in vulnerabilities:
+                    cve_id = item.get("cveID", "").strip().upper()
+                    if cve_id:
+                        cve_set.add(cve_id)
+                print(f"✅ [CISA KEV] {len(cve_set)} failles exploitées chargées en cache.")
+            else:
+                print(f"⚠️ [CISA KEV WARNING] HTTP {response.status} lors de la récupération du catalogue CISA.")
+    except Exception as e:
+        print(f"⚠️ [CISA KEV WARNING] Échec de la récupération du catalogue CISA KEV (continuations silencieuse) : {e}")
+    return cve_set
+
+def extract_cves(text):
+    """
+    Extrait les identifiants CVE uniques d'un texte sous forme de liste normalisée en majuscules.
+    """
+    if not text:
+        return []
+    matches = re.findall(r'\bCVE-\d{4}-\d{4,7}\b', text, re.IGNORECASE)
+    # Déduplication tout en préservant l'ordre d'apparition
+    seen = set()
+    unique_cves = []
+    for m in matches:
+        cve_upper = m.upper()
+        if cve_upper not in seen:
+            seen.add(cve_upper)
+            unique_cves.append(cve_upper)
+    return unique_cves
+
 async def collect_rss_articles_async():
     print("📡 [RSS] Ingestion asynchrone des flux RSS (mode fail-safe high-reliability)...")
     articles = []
@@ -134,8 +174,11 @@ async def collect_rss_articles_async():
     
     connector = aiohttp.TCPConnector(ssl=False)
     async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
+        # Lancement parallèle du catalogue CISA KEV + des flux RSS
+        cisa_task = fetch_cisa_kev_catalog_async(session)
         tasks = [fetch_feed(session, url, headers) for url in RSS_FEEDS]
-        results = await asyncio.gather(*tasks)
+        
+        cve_kev_set, *results = await asyncio.gather(cisa_task, *tasks)
         
         now_utc = datetime.datetime.now(datetime.timezone.utc)
         cutoff_time = now_utc - datetime.timedelta(hours=36)
@@ -158,14 +201,20 @@ async def collect_rss_articles_async():
                         continue
                 
                 if title and link:
+                    # Extraction & croisement CISA KEV direct sur le flux brut
+                    found_cves = extract_cves(f"{title} {summary_clean}")
+                    cisa_kev_cves = [cve for cve in found_cves if cve in cve_kev_set]
+                    
                     articles.append({
                         "title": title,
                         "link": link,
-                        "summary": summary_clean[:300]
+                        "summary": summary_clean[:300],
+                        "found_cves": found_cves,
+                        "cisa_kev_cves": cisa_kev_cves
                     })
                     
     print(f"✅ [RSS] {len(articles)} articles récents collectés. ({len(failed_feeds)} flux indisponibles)")
-    return articles, failed_feeds
+    return articles, failed_feeds, cve_kev_set
 
 # ---------------------------------------------------------------------------
 # 4. GESTION DES PAGES NOTION & HISTORIQUE HEBDOMADAIRE
@@ -696,8 +745,26 @@ def main():
         else:
             print("⚡ [MANUAL OVERRIDE] Relance manuelle / test détectée. L'ancienne page du jour sera archivée et remplacée.")
 
-    raw_articles, failed_feeds = asyncio.run(collect_rss_articles_async())
+    raw_articles, failed_feeds, cve_kev_set = asyncio.run(collect_rss_articles_async())
     gemini_data = process_with_gemini(raw_articles, memory_j_minus_1)
+
+    # Enrichissement CISA KEV post-Gemini sur la structure JSON finale
+    for cat_name, cat_articles in gemini_data.get("categories", {}).items():
+        for art in cat_articles:
+            title = art.get("title", "")
+            summary = art.get("summary", "")
+            found_cves = extract_cves(f"{title} {summary}")
+            kev_cves = [cve for cve in found_cves if cve in cve_kev_set]
+            
+            if kev_cves:
+                # Formatage compact : première CVE + compteur si multiples
+                if len(kev_cves) == 1:
+                    cisa_badge = f" ⚠️ CISA KEV [{kev_cves[0]}]"
+                else:
+                    cisa_badge = f" ⚠️ CISA KEV [{kev_cves[0]} +{len(kev_cves)-1}]"
+                
+                # Ajout direct à la fin du titre de l'article pour Notion & Telegram
+                art["title"] = f"{title}{cisa_badge}"
 
     page_url, reading_time = create_notion_journal_page(
         today_str, 

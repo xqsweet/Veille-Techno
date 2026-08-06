@@ -376,3 +376,23 @@ Mettre en place un module de filtrage Regex automatique avant tout envoi de cont
 #### Approche Technique Pressentie
 - Implémenter une fonction de nettoyage de texte par expressions régulières (Regex) en amont du pipeline de traitement IA.
 - Remplacer les patterns sensibles identifiés par des tokens génériques (ex: `[REDACTED_API_KEY]`, `[REDACTED_IP]`).
+
+---
+
+### 💡 Intégration n8n : Scraper Intelligent en Amont (Option 3)
+
+- **Statut :** 🟡 À l'étude
+- **Priorité :** 🟠 Moyenne
+- **Complexité :** 🛠️ Moyenne
+- **Impact Codebase :** main.py (adaptation de l'ingestion pour accepter un payload JSON en plus du RSS) + fichier YAML GitHub Actions (accepter input JSON).
+
+#### Description
+Utiliser n8n comme pré-traitement pour scraper des sources non-RSS (Discord, YouTube, Web) et envoyer les données au pipeline actuel via Webhook.
+
+Actuellement, le script Python lit des flux RSS standard. n8n pourrait servir à collecter des données là où le RSS n'existe pas, pour les fournir au script Python.
+- **Architecture :** n8n scrape des pages web complexes, écoute des canaux Discord/Slack spécifiques, ou extrait des données de vidéos YouTube. n8n formate ces données brutes en JSON et déclenche le webhook GitHub Actions en lui passant les datas en payload.
+- **Avantages :** Élargit drastiquement les sources d'information au-delà du simple format RSS.
+- **Inconvénients :** Ajoute une brique d'infrastructure supplémentaire avant l'exécution du script Python.
+
+#### Approche Technique Pressentie
+Scraping n8n en amont -> Webhook GitHub Actions payload JSON -> Ingestion Python
